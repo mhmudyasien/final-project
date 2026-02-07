@@ -1,9 +1,11 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from flask_migrate import Migrate
 from flask_swagger_ui import get_swaggerui_blueprint
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -123,11 +125,11 @@ def delete_task(task_id):
 def health_check():
     try:
         # Check database connection
-        db.session.execute('SELECT 1')
+        db.session.execute(text('SELECT 1'))
         return jsonify({
             'status': 'healthy',
             'database': 'connected',
-            'timestamp': db.func.now()
+            'timestamp': datetime.utcnow().isoformat()
         }), 200
     except Exception as e:
         return jsonify({

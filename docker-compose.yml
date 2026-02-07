@@ -32,7 +32,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 10
     restart: unless-stopped
 
   db:
