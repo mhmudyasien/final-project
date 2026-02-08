@@ -1,0 +1,60 @@
+# azure-pipelines-frontend.yml
+trigger:
+  branches:
+    include: [main, release/*]
+  tags:
+    include: [v*]
+  paths:
+    include: [frontend/*]
+
+pool:
+  name: "Default"
+
+variables:
+  - group: "frontend-variables"
+  - name: imageRepository
+    value: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/react-frontend"
+  - name: tag
+    value: "$(Build.BuildNumber)"
+
+stages:
+  - stage: QualityGate
+    jobs:
+      - job: OWASP
+        steps:
+          - template: devops/templates/security/owasp-dependency-check.yml
+            parameters:
+              language: "nodejs"
+
+      - job: SonarQube
+        steps:
+          - template: devops/templates/security/sonarqube-analysis.yml
+            parameters:
+              projectKey: "frontend-react"
+
+  - stage: TestAndBuild
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Build
+        steps:
+          - template: devops/templates/test/unit-tests.yml
+            parameters:
+              language: "nodejs"
+              testCommand: "npm test -- --watchAll=false --coverage --reporters=default --reporters=jest-junit"
+              coveragePath: "coverage/cobertura-coverage.xml"
+
+          - template: devops/templates/docker/build-scan-sign-push.yml
+            parameters:
+              dockerfilePath: "frontend/Dockerfile"
+              context: "frontend"
+              repository: $(imageRepository)
+              imageTags: ["$(tag)", "latest"]
+
+  - stage: TriggerInfra
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Trigger
+        steps:
+          - script: |
+              echo "Triggering infra pipeline for frontend-deploy with tag $(tag)..."
+            displayName: "Trigger CD"

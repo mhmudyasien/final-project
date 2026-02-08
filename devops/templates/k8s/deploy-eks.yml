@@ -1,0 +1,46 @@
+# devops/templates/k8s/deploy-eks.yml
+parameters:
+  - name: environment
+    type: string
+  - name: namespace
+    type: string
+  - name: manifestPath
+    type: string
+  - name: imageTag
+    type: string
+  - name: rollback
+    type: boolean
+    default: false
+
+steps:
+  - script: |
+      echo "Updating kubeconfig for EKS..."
+      aws eks update-kubeconfig --name $(CLUSTER_NAME) --region $(AWS_REGION)
+    displayName: "Kubeconfig Auth"
+
+  - script: |
+      echo "Deploying to namespace ${{ parameters.namespace }}..."
+
+      # Use envsubst to replace $VAR or ${VAR} in manifests
+      # We define the variables we want to replace to avoid replacing K8s internal vars
+      export IMAGE_TAG="${{ parameters.imageTag }}"
+
+      mkdir -p $(Pipeline.Workspace)/manifests
+      for file in ${{ parameters.manifestPath }}/*.yaml; do
+        envsubst '${IMAGE_TAG} ${RDS_ENDPOINT} ${REDIS_ENDPOINT} ${DB_PASSWORD} ${AWS_ACCOUNT_ID} ${AWS_REGION}' < "$file" > "$(Pipeline.Workspace)/manifests/$(basename "$file")"
+      done
+
+      kubectl apply -f $(Pipeline.Workspace)/manifests/ -n ${{ parameters.namespace }}
+    displayName: "Kubectl Apply"
+
+  - script: |
+      echo "Verifying deployment health..."
+      kubectl rollout status deployment/$(Build.Repository.Name) -n ${{ parameters.namespace }} --timeout=300s
+    displayName: "Health Check"
+
+  - ${{ if eq(parameters.rollback, true) }}:
+      - script: |
+          echo "Deployment failed! Initiating auto-rollback..."
+          kubectl rollout undo deployment/$(Build.Repository.Name) -n ${{ parameters.namespace }}
+        displayName: "Auto-Rollback"
+        condition: failed()

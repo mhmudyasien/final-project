@@ -1,0 +1,96 @@
+# azure-pipelines-infra.yml
+trigger: none # Triggered by other pipelines or manual
+
+resources:
+  pipelines:
+    - pipeline: backend
+      source: backend-repo
+      trigger: true
+    - pipeline: frontend
+      source: frontend-repo
+      trigger: true
+
+pool:
+  name: "Default"
+
+variables:
+  - group: "infra-variables" # CLUSTER_NAME, AWS_REGION, etc.
+
+stages:
+  - stage: TerraformPlan
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    jobs:
+      - job: Plan
+        steps:
+          - script: |
+              cd terraform
+              terraform init
+              terraform plan -out=tfplan
+            displayName: "Terraform Plan"
+
+          - template: devops/templates/infra/checkov-scan.yml
+            parameters:
+              directory: "terraform"
+
+  - stage: DeployDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DevDeploy
+        environment: "dev"
+        pool:
+          name: "Default"
+        variables:
+          - group: "infra-variables"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: devops/templates/k8s/deploy-eks.yml
+                  parameters:
+                    environment: "dev"
+                    namespace: "dev"
+                    manifestPath: "k8s/dev"
+                    imageTag: "$(backend.tag)"
+                    rollback: false
+
+  - stage: DeployStaging
+    condition: startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')
+    jobs:
+      - deployment: StagingDeploy
+        environment: "staging"
+        pool:
+          name: "Default"
+        variables:
+          - group: "infra-variables"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: devops/templates/k8s/deploy-eks.yml
+                  parameters:
+                    environment: "staging"
+                    namespace: "staging"
+                    manifestPath: "k8s/staging"
+                    imageTag: "$(backend.tag)"
+                    rollback: false
+
+  - stage: DeployProd
+    condition: startsWith(variables['Build.SourceBranch'], 'refs/tags/v')
+    jobs:
+      - deployment: ProdDeploy
+        environment: "production"
+        pool:
+          name: "Default"
+        variables:
+          - group: "infra-variables"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: devops/templates/k8s/deploy-eks.yml
+                  parameters:
+                    environment: "production"
+                    namespace: "prod"
+                    manifestPath: "k8s/prod"
+                    imageTag: "$(backend.tag)"
+                    rollback: true

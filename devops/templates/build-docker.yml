@@ -1,0 +1,21 @@
+# devops/templates/build-docker.yml
+parameters:
+  - name: dockerfilePath
+    type: string
+  - name: context
+    type: string
+  - name: repository
+    type: string
+  - name: tag
+    type: string
+
+steps:
+  - script: |
+      echo "Logging into AWS ECR..."
+      aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+    displayName: "ECR Login"
+
+  - script: |
+      docker build -t ${{ parameters.repository }}:${{ parameters.tag }} -f ${{ parameters.dockerfilePath }} ${{ parameters.context }}
+      docker push ${{ parameters.repository }}:${{ parameters.tag }}
+    displayName: "Build and Push"

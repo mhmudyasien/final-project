@@ -1,0 +1,12 @@
+# devops/templates/test/integration-tests.yml
+parameters:
+  - name: serviceName
+    type: string
+  - name: testCommand
+    type: string
+
+steps:
+  - script: |
+      echo "Running integration tests against ${{ parameters.serviceName }}..."
+      ${{ parameters.testCommand }}
+    displayName: "Run Integration Tests"

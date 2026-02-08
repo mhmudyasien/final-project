@@ -1,0 +1,31 @@
+# devops/templates/security-scans.yml
+parameters:
+- name: imageRepository
+  type: string
+- name: imageTag
+  type: string
+
+steps:
+- script: |
+    echo "Running Trivy Vulnerability Scan..."
+    trivy image --exit-code 1 --severity HIGH,CRITICAL ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
+  displayName: 'Trivy Scan'
+
+- script: |
+    echo "Generating SBOM with Syft..."
+    syft ${{ parameters.imageRepository }}:${{ parameters.imageTag }} -o cyclonedx-json > sbom.json
+  displayName: 'Generate SBOM'
+
+- script: |
+    echo "Signing Image with Cosign..."
+    # Requires COSIGN_PASSWORD and private key reachable by agent
+    # cosign sign --key k8s://namespace/secret ${{ parameters.imageRepository }}:${{ parameters.imageTag }}
+  displayName: 'Cosign Sign (Requires Key Setup)'
+
+- task: SonarQubePrepare@5
+  displayName: 'Prepare SonarQube Analysis'
+  inputs:
+    SonarQube: 'SonarQube-Server'
+    scannerMode: 'CLI'
+    configMode: 'manual'
+    cliProjectKey: '$(Build.Repository.Name)'

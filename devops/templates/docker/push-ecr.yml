@@ -1,0 +1,20 @@
+# devops/templates/docker/push-ecr.yml
+parameters:
+  - name: image
+    type: string
+  - name: repository
+    type: string
+  - name: tags
+    type: object
+
+steps:
+  - script: |
+      echo "Logging into AWS ECR..."
+      aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+    displayName: "ECR Login"
+
+  - ${{ each tag in parameters.tags }}:
+      - script: |
+          docker tag ${{ parameters.image }} ${{ parameters.repository }}:${{ tag }}
+          docker push ${{ parameters.repository }}:${{ tag }}
+        displayName: "Push tag: ${{ tag }}"

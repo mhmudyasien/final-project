@@ -1,0 +1,26 @@
+# devops/templates/auth-aws-oidc.yml
+parameters:
+- name: awsRegion
+  type: string
+  default: 'us-east-1'
+- name: roleArn
+  type: string
+
+steps:
+- script: |
+    # Request JWT from ADO
+    # Note: Requires ADO service connection with OIDC configured
+    echo "Configuring AWS OIDC session..."
+    # Normally this would use the AzureDevOps AWS Task, but for zero-cost self-hosted:
+    # We assume the agent has pre-existing trust or we use the 'aws-actions/configure-aws-credentials' equivalent logic if using runners.
+    # In ADO, we typically use the AWS Service Connection which handles this.
+  displayName: 'AWS OIDC Setup (Placeholder for Service Connection)'
+
+- task: AWSShellScript@1
+  displayName: 'Verify AWS Identity'
+  inputs:
+    awsCredentials: 'AWS-OIDC-Service-Connection'
+    regionName: ${{ parameters.awsRegion }}
+    scriptType: 'inline'
+    inlineScript: |
+      aws sts get-caller-identity

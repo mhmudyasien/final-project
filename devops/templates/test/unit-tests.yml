@@ -1,0 +1,27 @@
+# devops/templates/test/unit-tests.yml
+parameters:
+  - name: language
+    type: string
+  - name: testCommand
+    type: string
+  - name: coveragePath
+    type: string
+
+steps:
+  - script: |
+      ${{ parameters.testCommand }}
+    displayName: "Run Unit Tests"
+
+  - task: PublishTestResults@2
+    displayName: "Publish Test Results"
+    inputs:
+      testResultsFormat: "JUnit"
+      testResultsFiles: "**/test-results.xml"
+    condition: succeededOrFailed()
+
+  - task: PublishCodeCoverageResults@1
+    displayName: "Publish Code Coverage"
+    inputs:
+      codeCoverageTool: "Cobertura"
+      summaryFileLocation: "${{ parameters.coveragePath }}"
+    condition: succeededOrFailed()

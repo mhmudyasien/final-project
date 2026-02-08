@@ -1,0 +1,35 @@
+# devops/templates/docker/build-scan-sign-push.yml
+parameters:
+  - name: dockerfilePath
+    type: string
+  - name: context
+    type: string
+  - name: repository
+    type: string
+  - name: imageTags
+    type: object
+
+steps:
+  - script: |
+      echo "Building Docker image..."
+      # BuildKit enabled by default on self-hosted Ubuntu 22.04 with modern Docker
+      docker build -t local-build-image -f ${{ parameters.dockerfilePath }} ${{ parameters.context }}
+    displayName: "Docker Build"
+
+  - template: scan-trivy.yml
+    parameters:
+      image: "local-build-image"
+
+  - template: sbom-syft.yml
+    parameters:
+      image: "local-build-image"
+
+  - template: push-ecr.yml
+    parameters:
+      image: "local-build-image"
+      repository: ${{ parameters.repository }}
+      tags: ${{ parameters.imageTags }}
+
+  - template: sign-cosign.yml
+    parameters:
+      image: "${{ parameters.repository }}:${{ parameters.imageTags[0] }}"

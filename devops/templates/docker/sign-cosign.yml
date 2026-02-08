@@ -1,0 +1,19 @@
+# devops/templates/docker/sign-cosign.yml
+parameters:
+  - name: image
+    type: string
+
+steps:
+  - script: |
+      echo "Signing image ${{ parameters.image }}..."
+      # If COSIGN_KEY is not set, use keyless mode (OIDC)
+      if [ -z "$(COSIGN_KEY)" ]; then
+        cosign sign --yes ${{ parameters.image }}
+      else
+        echo "$(COSIGN_KEY)" > cosign.key
+        cosign sign --key cosign.key --yes ${{ parameters.image }}
+      fi
+    displayName: "Cosign Sign"
+    env:
+      COSIGN_PASSWORD: $(COSIGN_PASSWORD)
+      COSIGN_KEY: $(COSIGN_KEY)

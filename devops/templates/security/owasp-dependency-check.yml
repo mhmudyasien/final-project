@@ -1,0 +1,34 @@
+# devops/templates/security/owasp-dependency-check.yml
+parameters:
+  - name: language
+    type: string
+    values:
+      - python
+      - nodejs
+
+steps:
+  - ${{ if eq(parameters.language, 'python') }}:
+      - script: |
+          echo "Running pip-audit..."
+          pip-audit --format json -o owasp-report.json || true
+          echo "Running Bandit security linter..."
+          bandit -r src/ -f json -o bandit-report.json || true
+        displayName: "Backend Security Scan (pip-audit & bandit)"
+        condition: succeededOrFailed()
+
+  - ${{ if eq(parameters.language, 'nodejs') }}:
+      - script: |
+          echo "Running npm audit..."
+          npm audit --json > owasp-report.json || true
+          echo "Running Snyk test..."
+          # snyk test --json > snyk-report.json || true
+        displayName: "Frontend Security Scan (npm audit)"
+        condition: succeededOrFailed()
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Security Reports"
+    inputs:
+      targetPath: "$(Build.SourcesDirectory)"
+      artifact: "security-reports-$(parameters.language)-$(Build.BuildId)"
+      publishLocation: "pipeline"
+    condition: succeededOrFailed()

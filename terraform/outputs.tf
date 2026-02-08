@@ -1,24 +1,21 @@
-output "vpc_id" {
-  value = module.vpc.vpc_id
+# outputs.tf
+
+output "cluster_name" {
+  value = module.eks.cluster_name
 }
 
-output "public_subnets" {
-  value = [
-    module.public_subnet_1.subnet_id,
-    module.public_subnet_2.subnet_id
-  ]
+output "cluster_endpoint" {
+  value = module.eks.cluster_endpoint
 }
 
-output "private_backend_subnets" {
-  value = [
-    module.private_backend_subnet_1.subnet_id,
-    module.private_backend_subnet_2.subnet_id
-  ]
+output "alb_dns_name" {
+  value = module.alb.alb_dns_name
 }
 
-output "private_db_subnets" {
-  value = [
-    module.private_db_subnet_1.subnet_id,
-    module.private_db_subnet_2.subnet_id
-  ]
+output "rds_endpoint" {
+  value = module.rds.db_endpoint
+}
+
+output "redis_endpoint" {
+  value = module.redis.redis_endpoint
 }

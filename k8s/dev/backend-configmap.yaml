@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: dev
+data:
+  DATABASE_URL: "postgresql://postgres:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/appdb"
+  REDIS_HOST: "${REDIS_ENDPOINT}"
+  REDIS_PORT: "6379"

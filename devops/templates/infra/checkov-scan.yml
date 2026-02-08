@@ -1,0 +1,19 @@
+# devops/templates/infra/checkov-scan.yml
+parameters:
+  - name: directory
+    type: string
+
+steps:
+  - script: |
+      echo "Running Checkov on ${{ parameters.directory }}..."
+      checkov -d ${{ parameters.directory }} --quiet --no-guide --soft-fail
+    displayName: "Checkov Scan"
+    condition: succeededOrFailed()
+
+  - script: |
+      echo "Running Checkov on Terraform Plan JSON..."
+      cd ${{ parameters.directory }}
+      terraform show -json tfplan > tfplan.json
+      checkov -f tfplan.json --soft-fail
+    displayName: "Checkov Plan Scan"
+    condition: succeededOrFailed()

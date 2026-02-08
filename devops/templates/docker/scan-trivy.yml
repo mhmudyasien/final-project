@@ -1,0 +1,20 @@
+# devops/templates/docker/scan-trivy.yml
+parameters:
+  - name: image
+    type: string
+
+steps:
+  - script: |
+      echo "Running Trivy Scan on ${{ parameters.image }}..."
+      trivy image --exit-code 0 --severity HIGH,CRITICAL --format template --template "@/usr/local/share/trivy/templates/html.tpl" -o trivy-report.html ${{ parameters.image }}
+      trivy image --exit-code 1 --severity CRITICAL ${{ parameters.image }}
+    displayName: "Trivy Vulnerability Scan"
+    condition: succeededOrFailed()
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Trivy Report"
+    inputs:
+      targetPath: "trivy-report.html"
+      artifact: "trivy-report-$(Build.BuildId)"
+      publishLocation: "pipeline"
+    condition: succeededOrFailed()

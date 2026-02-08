@@ -1,0 +1,68 @@
+# azure-pipelines-backend.yml
+# TRUNK-BASED PIPELINE: PRs scan only, main deploys to DEV
+trigger:
+  branches:
+    include: [main, release/*]
+  tags:
+    include: [v*]
+  paths:
+    include: [backend/*]
+
+pool:
+  name: "Default"
+
+variables:
+  - group: "backend-variables" # AWS_ACCOUNT_ID, AWS_REGION, CLUSTER_NAME
+  - name: imageRepository
+    value: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/fastapi-backend"
+  - name: tag
+    value: "$(Build.BuildNumber)"
+
+stages:
+  - stage: QualityGate
+    displayName: "Static Analysis & Security"
+    jobs:
+      - job: OWASP_Scan
+        steps:
+          - template: devops/templates/security/owasp-dependency-check.yml
+            parameters:
+              language: "python"
+
+      - job: SonarQube
+        steps:
+          - template: devops/templates/security/sonarqube-analysis.yml
+            parameters:
+              projectKey: "backend-fastapi"
+
+  - stage: BuildAndPush
+    displayName: "Build & Push Secure Image"
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Build
+        container:
+          image: postgres:15
+          ports: ["5432:5432"] # Service container for integration tests
+        steps:
+          - template: devops/templates/test/unit-tests.yml
+            parameters:
+              language: "python"
+              testCommand: "pytest --junitxml=test-results.xml --cov=src --cov-report=xml"
+              coveragePath: "coverage.xml"
+
+          - template: devops/templates/docker/build-scan-sign-push.yml
+            parameters:
+              dockerfilePath: "backend/Dockerfile"
+              context: "backend"
+              repository: $(imageRepository)
+              imageTags: ["$(tag)", "latest"]
+
+  - stage: TriggerInfra
+    displayName: "Trigger CD Pipeline"
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Trigger
+        steps:
+          - script: |
+              echo "Triggering infra pipeline for backend-deploy with tag $(tag)..."
+              # Azure DevOps Rest API call to trigger infra-repo with tag as parameter
+            displayName: "Trigger CD (Rest API)"

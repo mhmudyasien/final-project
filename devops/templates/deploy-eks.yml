@@ -1,0 +1,34 @@
+# devops/templates/deploy-eks.yml
+parameters:
+  - name: environment
+    type: string
+  - name: namespace
+    type: string
+  - name: chartPath
+    type: string
+  - name: valuesFile
+    type: string
+
+jobs:
+  - deployment: Deploy${{ parameters.environment }}
+    displayName: "Deploy to ${{ parameters.environment }}"
+    environment: ${{ parameters.environment }} # Connects to ADO Environment for Approvals
+    pool:
+      name: "Default"
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - script: |
+                aws eks update-kubeconfig --name $(EKS_CLUSTER_NAME) --region $(AWS_REGION)
+                helm upgrade --install $(Build.Repository.Name) ${{ parameters.chartPath }} \
+                  --namespace ${{ parameters.namespace }} \
+                  --create-namespace \
+                  -f ${{ parameters.valuesFile }} \
+                  --set image.tag=$(Build.BuildId)
+              displayName: "Helm Deploy"
+
+            - script: |
+                echo "Waiting for rollout..."
+                kubectl rollout status deployment/$(Build.Repository.Name) -n ${{ parameters.namespace }} --timeout=300s
+              displayName: "Health Check"
