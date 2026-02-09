@@ -1,0 +1,113 @@
+parameters:
+  - name: imageName
+    type: string
+  - name: imageTag
+    type: string
+    default: "$(Build.BuildNumber)"
+  - name: severityThreshold
+    type: string
+    default: "CRITICAL,HIGH"
+  - name: failOnVulnerabilities
+    type: boolean
+    default: true
+  - name: ignoreUnfixed
+    type: boolean
+    default: false
+  - name: trivyVersion
+    type: string
+    default: "latest"
+
+steps:
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Installing Trivy"
+
+      # Install Trivy
+      if ! command -v trivy &> /dev/null; then
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install -y trivy
+      fi
+
+      trivy --version
+    displayName: "Install Trivy"
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Scanning image: ${{ parameters.imageName }}:${{ parameters.imageTag }}"
+      echo "Severity threshold: ${{ parameters.severityThreshold }}"
+      echo "Fail on vulnerabilities: ${{ parameters.failOnVulnerabilities }}"
+
+      # Create reports directory
+      mkdir -p $(Build.ArtifactStagingDirectory)/trivy-reports
+
+      IGNORE_UNFIXED=""
+      if [ "${{ parameters.ignoreUnfixed }}" = "True" ]; then
+        IGNORE_UNFIXED="--ignore-unfixed"
+      fi
+
+      # Run Trivy scan with multiple output formats
+      echo "##[command]Running Trivy scan..."
+
+      # JSON format for processing
+      trivy image \
+        --severity ${{ parameters.severityThreshold }} \
+        --format json \
+        --output $(Build.ArtifactStagingDirectory)/trivy-reports/trivy-report.json \
+        $IGNORE_UNFIXED \
+        ${{ parameters.imageName }}:${{ parameters.imageTag }}
+
+      # HTML format for human readability
+      trivy image \
+        --severity ${{ parameters.severityThreshold }} \
+        --format template \
+        --template "@/usr/local/share/trivy/templates/html.tpl" \
+        --output $(Build.ArtifactStagingDirectory)/trivy-reports/trivy-report.html \
+        $IGNORE_UNFIXED \
+        ${{ parameters.imageName }}:${{ parameters.imageTag }}
+
+      # Table format for console output
+      trivy image \
+        --severity ${{ parameters.severityThreshold }} \
+        $IGNORE_UNFIXED \
+        ${{ parameters.imageName }}:${{ parameters.imageTag }}
+
+      # Count vulnerabilities
+      VULN_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] | length' \
+        $(Build.ArtifactStagingDirectory)/trivy-reports/trivy-report.json)
+
+      echo "##[section]Scan Results"
+      echo "Critical/High vulnerabilities found: $VULN_COUNT"
+
+      # Set variable for later use
+      echo "##vso[task.setvariable variable=VulnerabilityCount;isOutput=true]$VULN_COUNT"
+
+      # Fail if vulnerabilities found and failOnVulnerabilities is true
+      if [ "${{ parameters.failOnVulnerabilities }}" = "True" ] && [ "$VULN_COUNT" -gt 0 ]; then
+        echo "##vso[task.logissue type=error]Found $VULN_COUNT critical/high vulnerabilities"
+        echo "##vso[task.complete result=Failed;]Security scan failed"
+        exit 1
+      fi
+
+    displayName: "Scan Image with Trivy"
+    name: TrivyScan
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Trivy Reports"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/trivy-reports"
+      artifact: "trivy-reports"
+      publishLocation: "pipeline"
+    condition: always()
+
+  - task: PublishTestResults@2
+    displayName: "Publish Trivy Results as Test Results"
+    inputs:
+      testResultsFormat: "JUnit"
+      testResultsFiles: "$(Build.ArtifactStagingDirectory)/trivy-reports/trivy-report.json"
+      testRunTitle: "Trivy Security Scan"
+      failTaskOnFailedTests: ${{ parameters.failOnVulnerabilities }}
+    condition: always()

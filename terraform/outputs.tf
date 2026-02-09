@@ -19,3 +19,28 @@ output "rds_endpoint" {
 output "redis_endpoint" {
   value = module.redis.redis_endpoint
 }
+
+output "vault_public_ip" {
+  value = module.vault.vault_public_ip
+}
+
+output "vault_kms_key_arn" {
+  value = module.vault.vault_kms_key_arn
+}
+
+output "vault_dynamodb_table_name" {
+  value = module.vault.vault_dynamodb_table_name
+}
+
+output "vault_security_group_id" {
+  value = module.vault.vault_security_group_id
+}
+
+output "node_security_group_id" {
+  value = module.eks.node_security_group_id
+}
+
+output "db_password" {
+  value     = var.db_password != "" ? var.db_password : module.security.db_password
+  sensitive = true
+}

@@ -1,0 +1,162 @@
+parameters:
+  - name: projectType
+    type: string # 'backend' or 'frontend'
+  - name: workingDirectory
+    type: string
+    default: "."
+  - name: testCommand
+    type: string
+    default: ""
+  - name: postgresVersion
+    type: string
+    default: "14"
+  - name: redisVersion
+    type: string
+    default: "7"
+
+steps:
+  - ${{ if eq(parameters.projectType, 'backend') }}:
+      # Service containers for integration tests
+      - script: |
+          set -euo pipefail
+
+          echo "##[section]Starting service containers"
+
+          # Start PostgreSQL
+          docker run -d \
+            --name postgres-test \
+            -e POSTGRES_USER=testuser \
+            -e POSTGRES_PASSWORD=testpass \
+            -e POSTGRES_DB=testdb \
+            -p 5432:5432 \
+            postgres:${{ parameters.postgresVersion }}-alpine
+
+          # Start Redis
+          docker run -d \
+            --name redis-test \
+            -p 6379:6379 \
+            redis:${{ parameters.redisVersion }}-alpine
+
+          # Wait for services to be ready
+          echo "Waiting for PostgreSQL..."
+          for i in {1..30}; do
+            if docker exec postgres-test pg_isready -U testuser; then
+              echo "PostgreSQL is ready"
+              break
+            fi
+            sleep 1
+          done
+
+          echo "Waiting for Redis..."
+          for i in {1..30}; do
+            if docker exec redis-test redis-cli ping | grep -q PONG; then
+              echo "Redis is ready"
+              break
+            fi
+            sleep 1
+          done
+
+          echo "##[section]Service containers ready"
+
+        displayName: "Start Service Containers"
+
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Running database migrations"
+
+          # Set test database URL
+          export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"
+          export REDIS_URL="redis://localhost:6379/0"
+
+          # Run migrations (adjust based on your migration tool)
+          # Example with Alembic:
+          # alembic upgrade head
+
+          # Or with Django:
+          # python manage.py migrate
+
+          echo "Migrations completed"
+
+        displayName: "Run Database Migrations"
+
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Running integration tests"
+
+          mkdir -p $(Build.ArtifactStagingDirectory)/integration-test-results
+
+          # Set environment variables for tests
+          export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"
+          export REDIS_URL="redis://localhost:6379/0"
+          export TESTING=true
+
+          TEST_CMD="${{ parameters.testCommand }}"
+          if [ -z "$TEST_CMD" ]; then
+            TEST_CMD="pytest tests/integration/ \
+              --cov=. \
+              --cov-report=xml:$(Build.ArtifactStagingDirectory)/integration-test-results/coverage.xml \
+              --cov-report=html:$(Build.ArtifactStagingDirectory)/integration-test-results/htmlcov \
+              --junitxml=$(Build.ArtifactStagingDirectory)/integration-test-results/test-results.xml \
+              --html=$(Build.ArtifactStagingDirectory)/integration-test-results/test-report.html \
+              --self-contained-html \
+              -v"
+          fi
+
+          eval $TEST_CMD
+
+        displayName: "Run Integration Tests"
+        name: IntegrationTests
+
+      - script: |
+          echo "##[section]Cleaning up service containers"
+
+          docker stop postgres-test redis-test || true
+          docker rm postgres-test redis-test || true
+
+        displayName: "Cleanup Service Containers"
+        condition: always()
+
+  - ${{ if eq(parameters.projectType, 'frontend') }}:
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Running integration tests"
+
+          mkdir -p $(Build.ArtifactStagingDirectory)/integration-test-results
+
+          TEST_CMD="${{ parameters.testCommand }}"
+          if [ -z "$TEST_CMD" ]; then
+            TEST_CMD="npm run test:integration -- \
+              --coverage \
+              --coverageDirectory=$(Build.ArtifactStagingDirectory)/integration-test-results/coverage"
+          fi
+
+          eval $TEST_CMD
+
+        displayName: "Run Integration Tests"
+        name: IntegrationTests
+
+  - task: PublishTestResults@2
+    displayName: "Publish Integration Test Results"
+    inputs:
+      testResultsFormat: "JUnit"
+      testResultsFiles: "$(Build.ArtifactStagingDirectory)/integration-test-results/test-results.xml"
+      testRunTitle: "Integration Tests - ${{ parameters.projectType }}"
+      failTaskOnFailedTests: true
+    condition: always()
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Integration Test Reports"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/integration-test-results"
+      artifact: "integration-test-results"
+      publishLocation: "pipeline"
+    condition: always()

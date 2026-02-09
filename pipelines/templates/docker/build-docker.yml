@@ -1,0 +1,98 @@
+parameters:
+  - name: dockerfilePath
+    type: string
+    default: "Dockerfile"
+  - name: buildContext
+    type: string
+    default: "."
+  - name: imageName
+    type: string
+  - name: imageTag
+    type: string
+    default: "$(Build.BuildNumber)"
+  - name: buildArgs
+    type: object
+    default: {}
+  - name: enableCache
+    type: boolean
+    default: true
+  - name: cacheRegistry
+    type: string
+    default: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com"
+
+steps:
+  - task: Docker@2
+    displayName: "Login to ECR"
+    inputs:
+      command: login
+      containerRegistry: "AWS-ECR-ServiceConnection"
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Building Docker image with BuildKit"
+      echo "Image: ${{ parameters.imageName }}:${{ parameters.imageTag }}"
+      echo "Dockerfile: ${{ parameters.dockerfilePath }}"
+      echo "Context: ${{ parameters.buildContext }}"
+
+      # Enable BuildKit
+      export DOCKER_BUILDKIT=1
+
+      # Prepare build arguments
+      BUILD_ARGS=""
+      ${{ each arg in parameters.buildArgs }}:
+        BUILD_ARGS="$BUILD_ARGS --build-arg ${{ arg.key }}=${{ arg.value }}"
+      done
+
+      # Cache configuration
+      CACHE_ARGS=""
+      if [ "${{ parameters.enableCache }}" = "True" ]; then
+        CACHE_FROM_IMAGE="${{ parameters.cacheRegistry }}/${{ parameters.imageName }}:cache"
+        echo "Cache enabled from: $CACHE_FROM_IMAGE"
+        CACHE_ARGS="--cache-from $CACHE_FROM_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1"
+      fi
+
+      # Build the image
+      docker build \
+        -f ${{ parameters.dockerfilePath }} \
+        -t ${{ parameters.imageName }}:${{ parameters.imageTag }} \
+        -t ${{ parameters.imageName }}:latest \
+        $BUILD_ARGS \
+        $CACHE_ARGS \
+        ${{ parameters.buildContext }}
+
+      echo "##[section]Build completed successfully"
+
+      # Display image size
+      IMAGE_SIZE=$(docker images ${{ parameters.imageName }}:${{ parameters.imageTag }} --format "{{.Size}}")
+      echo "##[command]Image size: $IMAGE_SIZE"
+
+      # Save image info for later stages
+      echo "##vso[task.setvariable variable=ImageName;isOutput=true]${{ parameters.imageName }}"
+      echo "##vso[task.setvariable variable=ImageTag;isOutput=true]${{ parameters.imageTag }}"
+
+    displayName: "Build Docker Image with BuildKit"
+    name: BuildImage
+    env:
+      DOCKER_BUILDKIT: 1
+
+  - script: |
+      # Get image digest
+      DIGEST=$(docker inspect --format='{{index .Id}}' ${{ parameters.imageName }}:${{ parameters.imageTag }})
+      echo "Image Digest: $DIGEST"
+      echo "##vso[task.setvariable variable=ImageDigest;isOutput=true]$DIGEST"
+    displayName: "Get Image Digest"
+    name: ImageInfo
+
+  - task: Docker@2
+    displayName: "Save Image as Artifact"
+    inputs:
+      command: save
+      arguments: "-o $(Build.ArtifactStagingDirectory)/image.tar ${{ parameters.imageName }}:${{ parameters.imageTag }}"
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Docker Image Artifact"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/image.tar"
+      artifact: "docker-image"
+      publishLocation: "pipeline"

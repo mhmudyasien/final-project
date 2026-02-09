@@ -9,11 +9,89 @@ spec:
       app: backend
   policyTypes:
     - Ingress
+    - Egress
   ingress:
+    # Allow traffic from frontend pods
     - from:
         - podSelector:
             matchLabels:
               app: frontend
+      ports:
+        - protocol: TCP
+          port: 5000
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow access to RDS (database subnets)
+    - to:
+        - ipBlock:
+            cidr: 10.0.20.0/24 # Database subnet 1
+        - ipBlock:
+            cidr: 10.0.21.0/24 # Database subnet 2
+      ports:
+        - protocol: TCP
+          port: 5432 # PostgreSQL
+    # Allow access to Redis (database subnets)
+    - to:
+        - ipBlock:
+            cidr: 10.0.20.0/24 # Database subnet 1
+        - ipBlock:
+            cidr: 10.0.21.0/24 # Database subnet 2
+      ports:
+        - protocol: TCP
+          port: 6379 # Redis
+    # Allow access to Vault (public subnets)
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/24 # Public subnet 1
+        - ipBlock:
+            cidr: 10.0.1.0/24 # Public subnet 2
+      ports:
+        - protocol: TCP
+          port: 8200 # Vault
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-policy
+  namespace: prod
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from anywhere (ALB)
+    # In production, you should restrict this to ALB security group
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 80
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow access to backend pods
+    - to:
+        - podSelector:
+            matchLabels:
+              app: backend
       ports:
         - protocol: TCP
           port: 5000

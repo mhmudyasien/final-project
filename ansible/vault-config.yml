@@ -1,0 +1,76 @@
+- name: Configure Vault for Kubernetes
+  hosts: localhost
+  connection: local
+  vars:
+    vault_addr: "{{ lookup('env', 'VAULT_ADDR') }}"
+    vault_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+    k8s_host: "{{ lookup('env', 'K8S_HOST') }}"
+    k8s_ca_cert: "{{ lookup('env', 'K8S_CA_CERT') }}"
+    db_password: "{{ lookup('env', 'DB_PASSWORD') }}"
+    rds_endpoint: "{{ lookup('env', 'RDS_ENDPOINT') }}"
+    redis_endpoint: "{{ lookup('env', 'REDIS_ENDPOINT') }}"
+
+  tasks:
+    - name: Enable KV v2 secrets engine
+      command: vault secrets enable -path=secret kv-v2
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ vault_token }}"
+      register: secret_enable
+      failed_when: "'path is already in use' not in secret_enable.stderr and secret_enable.rc != 0"
+      changed_when: secret_enable.rc == 0
+
+    - name: Enable Kubernetes auth method
+      command: vault auth enable kubernetes
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ vault_token }}"
+      register: auth_enable
+      failed_when: "'path is already in use' not in auth_enable.stderr and auth_enable.rc != 0"
+      changed_when: auth_enable.rc == 0
+
+    - name: Configure Kubernetes auth
+      command: >
+        vault write auth/kubernetes/config \
+        kubernetes_host="{{ k8s_host }}" \
+        kubernetes_ca_cert="{{ k8s_ca_cert }}" \
+        token_reviewer_jwt="{{ lookup('env', 'TOKEN_REVIEWER_JWT') }}" \
+        issuer="https://oidc.eks.us-east-2.amazonaws.com/id/E9A24F205507056D535A3A9656DB7800" \
+        disable_iss_validation=true
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ vault_token }}"
+
+    - name: Create webapp policy
+      copy:
+        dest: /tmp/webapp-policy.hcl
+        content: |
+          path "secret/data/webapp/*" {
+            capabilities = ["read"]
+          }
+
+    - name: Write webapp policy to Vault
+      command: vault policy write webapp /tmp/webapp-policy.hcl
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ vault_token }}"
+
+    - name: Create webapp role
+      command: >
+        vault write auth/kubernetes/role/webapp-role \
+        bound_service_account_names=default \
+        bound_service_account_namespaces=dev,staging,prod \
+        policies=webapp \
+        ttl=24h
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ vault_token }}"
+    - name: Write application secrets
+      command: >
+        vault kv put secret/webapp/config \
+        db_password="{{ db_password }}" \
+        rds_endpoint="{{ rds_endpoint }}" \
+        redis_endpoint="{{ redis_endpoint }}"
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ vault_token }}"

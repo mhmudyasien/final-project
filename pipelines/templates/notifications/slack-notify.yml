@@ -1,0 +1,147 @@
+parameters:
+  - name: webhookUrl
+    type: string
+  - name: message
+    type: string
+  - name: status
+    type: string # success, failure, warning, info
+  - name: channel
+    type: string
+    default: "#devops-alerts"
+  - name: mentionChannel
+    type: boolean
+    default: false
+
+steps:
+  - task: Bash@3
+    displayName: "Send Slack Notification"
+    condition: always()
+    inputs:
+      targetType: "inline"
+      script: |
+        set -euo pipefail
+
+        # Determine color and emoji based on status
+        case "${{ parameters.status }}" in
+          success)
+            COLOR="good"
+            EMOJI=":white_check_mark:"
+            ;;
+          failure)
+            COLOR="danger"
+            EMOJI=":x:"
+            ;;
+          warning)
+            COLOR="warning"
+            EMOJI=":warning:"
+            ;;
+          info)
+            COLOR="#0078D4"
+            EMOJI=":information_source:"
+            ;;
+          *)
+            COLOR="#808080"
+            EMOJI=":grey_question:"
+            ;;
+        esac
+
+        # Add channel mention if requested
+        MENTION=""
+        if [ "${{ parameters.mentionChannel }}" = "True" ]; then
+          MENTION="<!channel> "
+        fi
+
+        # Get commit info
+        COMMIT_MSG=$(echo "$(Build.SourceVersionMessage)" | head -c 100)
+        COMMIT_SHA=$(echo "$(Build.SourceVersion)" | cut -c1-7)
+
+        # Calculate duration
+        START_TIME=$(date -d "$(System.PipelineStartTime)" +%s 2>/dev/null || echo "0")
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        DURATION_MIN=$((DURATION / 60))
+        DURATION_SEC=$((DURATION % 60))
+
+        # Build JSON payload
+        PAYLOAD=$(cat <<EOF
+        {
+          "channel": "${{ parameters.channel }}",
+          "username": "Azure DevOps",
+          "icon_emoji": ":azure:",
+          "text": "${MENTION}${EMOJI} ${{ parameters.message }}",
+          "attachments": [
+            {
+              "color": "$COLOR",
+              "fields": [
+                {
+                  "title": "Pipeline",
+                  "value": "$(Build.DefinitionName)",
+                  "short": true
+                },
+                {
+                  "title": "Build Number",
+                  "value": "#$(Build.BuildNumber)",
+                  "short": true
+                },
+                {
+                  "title": "Branch",
+                  "value": "\`$(Build.SourceBranchName)\`",
+                  "short": true
+                },
+                {
+                  "title": "Status",
+                  "value": "${{ parameters.status }}",
+                  "short": true
+                },
+                {
+                  "title": "Triggered By",
+                  "value": "$(Build.RequestedFor)",
+                  "short": true
+                },
+                {
+                  "title": "Duration",
+                  "value": "${DURATION_MIN}m ${DURATION_SEC}s",
+                  "short": true
+                },
+                {
+                  "title": "Commit",
+                  "value": "\`$COMMIT_SHA\` - $COMMIT_MSG",
+                  "short": false
+                }
+              ],
+              "actions": [
+                {
+                  "type": "button",
+                  "text": "View Build",
+                  "url": "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)",
+                  "style": "primary"
+                },
+                {
+                  "type": "button",
+                  "text": "View Commit",
+                  "url": "$(Build.Repository.Uri)/commit/$(Build.SourceVersion)"
+                }
+              ],
+              "footer": "Azure DevOps Pipeline",
+              "footer_icon": "https://cdn.vsassets.io/content/icons/favicon.ico",
+              "ts": $(date +%s)
+            }
+          ]
+        }
+        EOF
+        )
+
+        # Send to Slack
+        HTTP_CODE=$(curl -X POST \
+          -H 'Content-type: application/json' \
+          --data "$PAYLOAD" \
+          -w "%{http_code}" \
+          -o /tmp/slack_response.txt \
+          ${{ parameters.webhookUrl }})
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "##[warning]Slack notification failed with HTTP code: $HTTP_CODE"
+          cat /tmp/slack_response.txt
+        else
+          echo "##[section]Slack notification sent successfully"
+        fi

@@ -1,0 +1,119 @@
+parameters:
+  - name: projectType
+    type: string # 'backend' or 'frontend'
+  - name: workingDirectory
+    type: string
+    default: "."
+  - name: failOnHigh
+    type: boolean
+    default: true
+
+steps:
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]OWASP Dependency Check for ${{ parameters.projectType }}"
+
+      cd ${{ parameters.workingDirectory }}
+
+      # Create reports directory
+      mkdir -p $(Build.ArtifactStagingDirectory)/security-reports
+
+      if [ "${{ parameters.projectType }}" = "backend" ]; then
+        echo "##[command]Running Python security checks"
+        
+        # Install security tools
+        pip install bandit pip-audit safety --quiet
+        
+        # Bandit - Python code security scanner
+        echo "##[group]Running Bandit"
+        bandit -r . \
+          -f json \
+          -o $(Build.ArtifactStagingDirectory)/security-reports/bandit-report.json \
+          --exclude './tests,./venv,./env' || true
+        
+        bandit -r . \
+          -f html \
+          -o $(Build.ArtifactStagingDirectory)/security-reports/bandit-report.html \
+          --exclude './tests,./venv,./env' || true
+        
+        # Display summary
+        bandit -r . --exclude './tests,./venv,./env' || true
+        echo "##[endgroup]"
+        
+        # pip-audit - Check for known vulnerabilities in dependencies
+        echo "##[group]Running pip-audit"
+        pip-audit \
+          --format json \
+          --output $(Build.ArtifactStagingDirectory)/security-reports/pip-audit-report.json || true
+        
+        pip-audit || true
+        echo "##[endgroup]"
+        
+        # Safety - Check dependencies against safety DB
+        echo "##[group]Running Safety"
+        safety check \
+          --json \
+          --output $(Build.ArtifactStagingDirectory)/security-reports/safety-report.json || true
+        
+        safety check || true
+        echo "##[endgroup]"
+        
+        # Count high-severity issues
+        HIGH_COUNT=$(jq '[.results[] | select(.issue_severity == "HIGH" or .issue_severity == "CRITICAL")] | length' \
+          $(Build.ArtifactStagingDirectory)/security-reports/bandit-report.json 2>/dev/null || echo "0")
+        
+        echo "High/Critical severity issues: $HIGH_COUNT"
+        echo "##vso[task.setvariable variable=HighSeverityCount;isOutput=true]$HIGH_COUNT"
+        
+        if [ "${{ parameters.failOnHigh }}" = "True" ] && [ "$HIGH_COUNT" -gt 0 ]; then
+          echo "##vso[task.logissue type=error]Found $HIGH_COUNT high/critical severity issues"
+          exit 1
+        fi
+        
+      elif [ "${{ parameters.projectType }}" = "frontend" ]; then
+        echo "##[command]Running JavaScript security checks"
+        
+        # npm audit
+        echo "##[group]Running npm audit"
+        npm audit \
+          --json \
+          > $(Build.ArtifactStagingDirectory)/security-reports/npm-audit-report.json || true
+        
+        npm audit || true
+        echo "##[endgroup]"
+        
+        # Install and run retire.js
+        echo "##[group]Running retire.js"
+        npm install -g retire
+        
+        retire \
+          --outputformat json \
+          --outputpath $(Build.ArtifactStagingDirectory)/security-reports/retire-report.json || true
+        
+        retire || true
+        echo "##[endgroup]"
+        
+        # Count vulnerabilities
+        HIGH_COUNT=$(jq '[.vulnerabilities | to_entries[] | select(.value.severity == "high" or .value.severity == "critical")] | length' \
+          $(Build.ArtifactStagingDirectory)/security-reports/npm-audit-report.json 2>/dev/null || echo "0")
+        
+        echo "High/Critical severity issues: $HIGH_COUNT"
+        echo "##vso[task.setvariable variable=HighSeverityCount;isOutput=true]$HIGH_COUNT"
+        
+        if [ "${{ parameters.failOnHigh }}" = "True" ] && [ "$HIGH_COUNT" -gt 0 ]; then
+          echo "##vso[task.logissue type=error]Found $HIGH_COUNT high/critical severity issues"
+          exit 1
+        fi
+      fi
+
+    displayName: "OWASP Dependency Check"
+    name: OWASPCheck
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Security Reports"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/security-reports"
+      artifact: "owasp-reports"
+      publishLocation: "pipeline"
+    condition: always()

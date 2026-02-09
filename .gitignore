@@ -1,6 +1,87 @@
 # Terraform
-.terraform/
 *.tfstate
 *.tfstate.*
+*.tfvars
+.terraform/
 .terraform.lock.hcl
+terraform.tfstate.d/
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
+# Vault sensitive files
+vault-init-keys.json
+vault_auth_token.txt
+*.unseal
+vault-keys.txt
+
+# Kubernetes secrets
+*-secret.yaml
+secrets/
+
+# AWS credentials
+*.pem
+*.key
+.aws/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Binaries
+kubectl
+helm
+vault
+cosign
+trivy
+
+# Temporary files
+*.tmp
+*.bak
+.cache/
+
+# Docker
+.dockerignore
+
+# Test coverage
+htmlcov/
+.coverage
+.pytest_cache/
+coverage/
+
+# Scripts (keep source, ignore downloaded binaries)
+get_helm.sh
+
+# Build artifacts
+*.tar
+*.zip

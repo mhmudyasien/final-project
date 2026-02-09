@@ -1,0 +1,70 @@
+# Kyverno Helm Values
+# Install with: helm install kyverno kyverno/kyverno -n kyverno --create-namespace -f kyverno-values.yaml
+
+replicaCount: 3
+
+resources:
+  limits:
+    memory: 512Mi
+    cpu: 500m
+  requests:
+    memory: 256Mi
+    cpu: 100m
+
+# Enable policy reports for audit mode
+policyReports:
+  enabled: true
+
+# Background scanning for existing resources
+backgroundController:
+  enabled: true
+  replicas: 2
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+# Reports controller for policy reports
+reportsController:
+  enabled: true
+  replicas: 2
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+# Admission controller configuration
+admissionController:
+  replicas: 3
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+# Enable metrics for monitoring
+metricsService:
+  enabled: true
+
+# Webhook configuration
+webhooksCleanup:
+  enabled: true
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault

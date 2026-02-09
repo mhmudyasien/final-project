@@ -1,0 +1,13 @@
+variables:
+  # AWS Configuration
+  AWS_REGION: "us-east-2"
+  AWS_ACCOUNT_ID: "$(aws-account-id)" # Set in Azure DevOps Library
+
+  # EKS Configuration
+  EKS_CLUSTER_NAME: "$(eks-cluster-name)" # Set in Azure DevOps Library
+
+  # Docker Configuration
+  DOCKER_BUILDKIT: 1
+
+  # SonarQube Configuration
+  SONARQUBE_URL: "$(sonarqube-url)" # Set in Azure DevOps Library

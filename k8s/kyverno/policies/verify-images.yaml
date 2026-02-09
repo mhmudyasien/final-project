@@ -1,0 +1,97 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-ecr-signed-images
+  annotations:
+    policies.kyverno.io/title: Verify ECR Image Signatures
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Verifies that all container images from ECR are signed with Cosign.
+      This ensures only trusted, signed images are deployed to the cluster.
+spec:
+  validationFailureAction: Audit # Change to "Enforce" after testing
+  background: false
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  rules:
+    - name: verify-cosign-signature
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - prod
+                - staging
+                - dev
+      verifyImages:
+        # Verify all images from your ECR registry
+        - imageReferences:
+            - "*.dkr.ecr.us-east-2.amazonaws.com/*:*"
+          attestors:
+            - count: 1
+              entries:
+                # Keyless signing with OIDC (Azure DevOps)
+                - keyless:
+                    subject: "https://vstoken.dev.azure.com/*"
+                    issuer: "https://vstoken.dev.azure.com/*"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+                      ignoreTlog: false
+          # Mutate image to use digest for immutability
+          mutateDigest: true
+          # Verify attestations (SBOM, etc.)
+          verifyDigest: true
+          # Require image to be signed
+          required: true
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-ecr-signed-images-key-based
+  annotations:
+    policies.kyverno.io/title: Verify ECR Image Signatures (Key-Based)
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Alternative policy for key-based Cosign signing.
+      Enable this if using COSIGN_KEY instead of keyless signing.
+      Disable the keyless policy above if using this one.
+spec:
+  validationFailureAction: Audit # Change to "Enforce" after testing
+  background: false
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  rules:
+    - name: verify-cosign-signature-with-key
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - prod
+                - staging
+                - dev
+      verifyImages:
+        - imageReferences:
+            - "*.dkr.ecr.us-east-2.amazonaws.com/*:*"
+          attestors:
+            - count: 1
+              entries:
+                - keys:
+                    # Reference to ConfigMap or Secret containing public key
+                    # Create with: kubectl create configmap cosign-pub-key -n kyverno --from-file=cosign.pub
+                    publicKeys: |-
+                      -----BEGIN PUBLIC KEY-----
+                      # REPLACE WITH YOUR COSIGN PUBLIC KEY
+                      # Generate with: cosign generate-key-pair
+                      # Or extract from existing: cosign public-key --key cosign.key
+                      -----END PUBLIC KEY-----
+          mutateDigest: true
+          verifyDigest: true
+          required: true

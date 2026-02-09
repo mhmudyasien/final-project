@@ -1,0 +1,175 @@
+parameters:
+  - name: projectType
+    type: string # 'backend' or 'frontend'
+  - name: workingDirectory
+    type: string
+    default: "."
+  - name: testCommand
+    type: string
+    default: "" # Custom test command
+  - name: coverageThreshold
+    type: number
+    default: 80
+  - name: pythonVersion
+    type: string
+    default: "3.11"
+  - name: nodeVersion
+    type: string
+    default: "18.x"
+
+steps:
+  - ${{ if eq(parameters.projectType, 'backend') }}:
+      - task: UsePythonVersion@0
+        displayName: "Use Python ${{ parameters.pythonVersion }}"
+        inputs:
+          versionSpec: ${{ parameters.pythonVersion }}
+
+      - task: Cache@2
+        displayName: "Cache pip packages"
+        inputs:
+          key: 'pip | "$(Agent.OS)" | ${{ parameters.workingDirectory }}/requirements.txt'
+          path: $(Pipeline.Workspace)/.pip
+          restoreKeys: |
+            pip | "$(Agent.OS)"
+            pip
+
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Installing dependencies"
+          python -m pip install --upgrade pip
+          pip install --cache-dir $(Pipeline.Workspace)/.pip -r requirements.txt
+          pip install pytest pytest-cov pytest-html pytest-xdist
+
+        displayName: "Install Python Dependencies"
+
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Running unit tests with coverage"
+
+          mkdir -p $(Build.ArtifactStagingDirectory)/test-results
+
+          TEST_CMD="${{ parameters.testCommand }}"
+          if [ -z "$TEST_CMD" ]; then
+            TEST_CMD="pytest tests/ \
+              --cov=. \
+              --cov-report=xml:$(Build.ArtifactStagingDirectory)/test-results/coverage.xml \
+              --cov-report=html:$(Build.ArtifactStagingDirectory)/test-results/htmlcov \
+              --cov-report=term \
+              --junitxml=$(Build.ArtifactStagingDirectory)/test-results/test-results.xml \
+              --html=$(Build.ArtifactStagingDirectory)/test-results/test-report.html \
+              --self-contained-html \
+              -n auto \
+              -v"
+          fi
+
+          eval $TEST_CMD
+
+          # Check coverage threshold
+          COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('$(Build.ArtifactStagingDirectory)/test-results/coverage.xml'); root = tree.getroot(); print(float(root.attrib['line-rate']) * 100)")
+
+          echo "##[section]Coverage: ${COVERAGE}%"
+          echo "##vso[task.setvariable variable=CodeCoverage;isOutput=true]$COVERAGE"
+
+          if (( $(echo "$COVERAGE < ${{ parameters.coverageThreshold }}" | bc -l) )); then
+            echo "##vso[task.logissue type=warning]Coverage ${COVERAGE}% is below threshold ${{ parameters.coverageThreshold }}%"
+          fi
+
+        displayName: "Run Python Unit Tests"
+        name: UnitTests
+
+  - ${{ if eq(parameters.projectType, 'frontend') }}:
+      - task: NodeTool@0
+        displayName: "Use Node.js ${{ parameters.nodeVersion }}"
+        inputs:
+          versionSpec: ${{ parameters.nodeVersion }}
+
+      - task: Cache@2
+        displayName: "Cache npm packages"
+        inputs:
+          key: 'npm | "$(Agent.OS)" | ${{ parameters.workingDirectory }}/package-lock.json'
+          path: $(Pipeline.Workspace)/.npm
+          restoreKeys: |
+            npm | "$(Agent.OS)"
+            npm
+
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Installing dependencies"
+          npm ci --cache $(Pipeline.Workspace)/.npm --prefer-offline
+
+        displayName: "Install npm Dependencies"
+
+      - script: |
+          set -euo pipefail
+
+          cd ${{ parameters.workingDirectory }}
+
+          echo "##[section]Running unit tests with coverage"
+
+          mkdir -p $(Build.ArtifactStagingDirectory)/test-results
+
+          TEST_CMD="${{ parameters.testCommand }}"
+          if [ -z "$TEST_CMD" ]; then
+            TEST_CMD="npm test -- \
+              --coverage \
+              --coverageReporters=cobertura \
+              --coverageReporters=html \
+              --coverageReporters=text \
+              --coverageDirectory=$(Build.ArtifactStagingDirectory)/test-results/coverage \
+              --testResultsProcessor=jest-junit"
+          fi
+
+          # Set Jest environment variables
+          export JEST_JUNIT_OUTPUT_DIR=$(Build.ArtifactStagingDirectory)/test-results
+          export JEST_JUNIT_OUTPUT_NAME=test-results.xml
+
+          eval $TEST_CMD
+
+          # Check coverage threshold
+          if [ -f "$(Build.ArtifactStagingDirectory)/test-results/coverage/cobertura-coverage.xml" ]; then
+            COVERAGE=$(python3 -c "import xml.etree.ElementTree as ET; tree = ET.parse('$(Build.ArtifactStagingDirectory)/test-results/coverage/cobertura-coverage.xml'); root = tree.getroot(); print(float(root.attrib['line-rate']) * 100)" 2>/dev/null || echo "0")
+            
+            echo "##[section]Coverage: ${COVERAGE}%"
+            echo "##vso[task.setvariable variable=CodeCoverage;isOutput=true]$COVERAGE"
+            
+            if (( $(echo "$COVERAGE < ${{ parameters.coverageThreshold }}" | bc -l) )); then
+              echo "##vso[task.logissue type=warning]Coverage ${COVERAGE}% is below threshold ${{ parameters.coverageThreshold }}%"
+            fi
+          fi
+
+        displayName: "Run Jest Unit Tests"
+        name: UnitTests
+
+  - task: PublishTestResults@2
+    displayName: "Publish Test Results"
+    inputs:
+      testResultsFormat: "JUnit"
+      testResultsFiles: "$(Build.ArtifactStagingDirectory)/test-results/test-results.xml"
+      testRunTitle: "Unit Tests - ${{ parameters.projectType }}"
+      failTaskOnFailedTests: true
+    condition: always()
+
+  - task: PublishCodeCoverageResults@1
+    displayName: "Publish Code Coverage"
+    inputs:
+      codeCoverageTool: "Cobertura"
+      summaryFileLocation: "$(Build.ArtifactStagingDirectory)/test-results/coverage*.xml"
+      reportDirectory: "$(Build.ArtifactStagingDirectory)/test-results/htmlcov"
+    condition: always()
+
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Test Reports"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/test-results"
+      artifact: "test-results"
+      publishLocation: "pipeline"
+    condition: always()

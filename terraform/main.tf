@@ -50,3 +50,11 @@ module "redis" {
   eks_node_sg_id = module.eks.node_security_group_id
   kms_key_arn    = module.security.redis_kms_arn
 }
+
+module "vault" {
+  source              = "./modules/vault"
+  project_name        = var.project_name
+  vpc_id              = module.vpc.vpc_id
+  subnet_ids          = module.vpc.public_subnets
+  allowed_cidr_blocks = ["0.0.0.0/0"] # Temporary for setup, will restrict in next step
+}

@@ -1,0 +1,200 @@
+parameters:
+  - name: environment
+    type: string # dev, staging, or prod
+  - name: namespace
+    type: string
+  - name: manifestsPath
+    type: string
+  - name: imageTag
+    type: string
+    default: "$(Build.BuildNumber)"
+  - name: awsRegion
+    type: string
+    default: "us-east-2"
+  - name: clusterName
+    type: string
+  - name: healthCheckTimeout
+    type: number
+    default: 300
+  - name: enableRollback
+    type: boolean
+    default: true
+
+steps:
+  - task: AWSCLI@1
+    displayName: "Configure AWS CLI"
+    inputs:
+      awsCredentials: "AWS-ServiceConnection"
+      regionName: ${{ parameters.awsRegion }}
+      awsCommand: "configure"
+      awsSubCommand: "set"
+      awsArguments: "region ${{ parameters.awsRegion }}"
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Configuring kubectl for EKS"
+
+      # Update kubeconfig for EKS cluster
+      aws eks update-kubeconfig \
+        --name ${{ parameters.clusterName }} \
+        --region ${{ parameters.awsRegion }}
+
+      # Verify connectivity
+      kubectl cluster-info
+      kubectl version --short
+
+      echo "##[section]kubectl configured successfully"
+
+    displayName: "Configure kubectl"
+    env:
+      AWS_DEFAULT_REGION: ${{ parameters.awsRegion }}
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Preparing deployment to ${{ parameters.environment }}"
+
+      # Create namespace if it doesn't exist
+      kubectl create namespace ${{ parameters.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+      # Set environment variables for manifest substitution
+      export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      export AWS_REGION=${{ parameters.awsRegion }}
+      export IMAGE_TAG=${{ parameters.imageTag }}
+      export ENVIRONMENT=${{ parameters.environment }}
+
+      echo "Deployment configuration:"
+      echo "  Environment: $ENVIRONMENT"
+      echo "  Namespace: ${{ parameters.namespace }}"
+      echo "  AWS Account: $AWS_ACCOUNT_ID"
+      echo "  AWS Region: $AWS_REGION"
+      echo "  Image Tag: $IMAGE_TAG"
+
+    displayName: "Prepare Deployment"
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Applying Kubernetes manifests"
+
+      export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      export AWS_REGION=${{ parameters.awsRegion }}
+      export IMAGE_TAG=${{ parameters.imageTag }}
+
+      MANIFEST_COUNT=0
+      for file in ${{ parameters.manifestsPath }}/*.yaml; do
+        if [ -f "$file" ]; then
+          echo "##[command]Applying $(basename "$file")"
+          envsubst < "$file" | kubectl apply -f -
+          ((MANIFEST_COUNT++))
+        fi
+      done
+
+      echo "##[section]Applied $MANIFEST_COUNT manifests"
+
+    displayName: "Apply Manifests"
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Waiting for deployments to be ready"
+
+      TIMEOUT=${{ parameters.healthCheckTimeout }}
+
+      # Wait for backend deployment
+      if kubectl get deployment backend -n ${{ parameters.namespace }} >/dev/null 2>&1; then
+        echo "##[command]Waiting for backend deployment..."
+        if kubectl rollout status deployment/backend -n ${{ parameters.namespace }} --timeout=${TIMEOUT}s; then
+          echo "Backend deployment ready"
+        else
+          echo "##vso[task.logissue type=error]Backend deployment failed to become ready"
+          exit 1
+        fi
+      fi
+
+      # Wait for frontend deployment
+      if kubectl get deployment frontend -n ${{ parameters.namespace }} >/dev/null 2>&1; then
+        echo "##[command]Waiting for frontend deployment..."
+        if kubectl rollout status deployment/frontend -n ${{ parameters.namespace }} --timeout=${TIMEOUT}s; then
+          echo "Frontend deployment ready"
+        else
+          echo "##vso[task.logissue type=error]Frontend deployment failed to become ready"
+          exit 1
+        fi
+      fi
+
+      echo "##[section]All deployments ready"
+
+    displayName: "Wait for Deployments"
+    name: WaitDeployments
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]Performing health checks"
+
+      RETRIES=30
+      INTERVAL=10
+
+      # Check backend pods
+      for i in $(seq 1 $RETRIES); do
+        BACKEND_READY=$(kubectl get pods -n ${{ parameters.namespace }} -l app=backend -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | grep -o "True" | wc -l)
+        BACKEND_TOTAL=$(kubectl get pods -n ${{ parameters.namespace }} -l app=backend --no-headers | wc -l)
+        
+        if [ "$BACKEND_READY" -gt 0 ] && [ "$BACKEND_READY" -eq "$BACKEND_TOTAL" ]; then
+          echo "✓ Backend health check passed ($BACKEND_READY/$BACKEND_TOTAL pods ready)"
+          break
+        fi
+        
+        echo "Backend health check: $BACKEND_READY/$BACKEND_TOTAL pods ready (attempt $i/$RETRIES)"
+        sleep $INTERVAL
+      done
+
+      # Check frontend pods
+      for i in $(seq 1 $RETRIES); do
+        FRONTEND_READY=$(kubectl get pods -n ${{ parameters.namespace }} -l app=frontend -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | grep -o "True" | wc -l)
+        FRONTEND_TOTAL=$(kubectl get pods -n ${{ parameters.namespace }} -l app=frontend --no-headers | wc -l)
+        
+        if [ "$FRONTEND_READY" -gt 0 ] && [ "$FRONTEND_READY" -eq "$FRONTEND_TOTAL" ]; then
+          echo "✓ Frontend health check passed ($FRONTEND_READY/$FRONTEND_TOTAL pods ready)"
+          break
+        fi
+        
+        echo "Frontend health check: $FRONTEND_READY/$FRONTEND_TOTAL pods ready (attempt $i/$RETRIES)"
+        sleep $INTERVAL
+      done
+
+      echo "##[section]Health checks completed"
+
+    displayName: "Health Checks"
+    name: HealthChecks
+
+  - script: |
+      echo "##[section]Deployment Status"
+      echo ""
+      echo "=== Pods ==="
+      kubectl get pods -n ${{ parameters.namespace }} -o wide
+      echo ""
+      echo "=== Services ==="
+      kubectl get services -n ${{ parameters.namespace }}
+      echo ""
+      echo "=== Deployments ==="
+      kubectl get deployments -n ${{ parameters.namespace }}
+      echo ""
+    displayName: "Display Deployment Status"
+    condition: always()
+
+  - script: |
+      set -euo pipefail
+
+      if [ "${{ parameters.enableRollback }}" = "True" ]; then
+        echo "##[section]Rolling back failed deployment"
+        
+        kubectl rollout undo deployment/backend -n ${{ parameters.namespace }} || true
+        kubectl rollout undo deployment/frontend -n ${{ parameters.namespace }} || true
+        
+        echo "Rollback initiated"
+      fi
+    displayName: "Rollback on Failure"
+    condition: failed()

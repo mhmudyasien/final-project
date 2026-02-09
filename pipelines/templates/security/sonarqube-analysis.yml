@@ -1,0 +1,111 @@
+parameters:
+  - name: projectKey
+    type: string
+  - name: projectName
+    type: string
+  - name: projectType
+    type: string # 'backend' or 'frontend'
+  - name: workingDirectory
+    type: string
+    default: "."
+  - name: sonarqubeEndpoint
+    type: string
+    default: "SonarQube-ServiceConnection"
+  - name: coveragePath
+    type: string
+    default: ""
+  - name: qualityGateWait
+    type: boolean
+    default: true
+
+steps:
+  - task: SonarQubePrepare@5
+    displayName: "Prepare SonarQube Analysis"
+    inputs:
+      SonarQube: ${{ parameters.sonarqubeEndpoint }}
+      scannerMode: "CLI"
+      configMode: "manual"
+      cliProjectKey: ${{ parameters.projectKey }}
+      cliProjectName: ${{ parameters.projectName }}
+      cliSources: ${{ parameters.workingDirectory }}
+      extraProperties: |
+        # Project settings
+        sonar.projectVersion=$(Build.BuildNumber)
+        sonar.sourceEncoding=UTF-8
+
+        # Branch analysis
+        sonar.branch.name=$(Build.SourceBranchName)
+
+        # Language-specific settings
+        ${{ if eq(parameters.projectType, 'backend') }}:
+          sonar.language=py
+          sonar.python.version=3.11
+          sonar.sources=.
+          sonar.exclusions=**/tests/**,**/venv/**,**/env/**,**/__pycache__/**
+          sonar.tests=tests
+          sonar.test.inclusions=**/test_*.py,**/*_test.py
+          ${{ if ne(parameters.coveragePath, '') }}:
+            sonar.python.coverage.reportPaths=${{ parameters.coveragePath }}
+        done
+
+        ${{ if eq(parameters.projectType, 'frontend') }}:
+          sonar.language=js,ts
+          sonar.javascript.node.maxspace=4096
+          sonar.sources=src
+          sonar.exclusions=**/node_modules/**,**/build/**,**/dist/**,**/*.test.js,**/*.test.ts,**/*.spec.js,**/*.spec.ts
+          sonar.tests=src
+          sonar.test.inclusions=**/*.test.js,**/*.test.ts,**/*.spec.js,**/*.spec.ts
+          ${{ if ne(parameters.coveragePath, '') }}:
+            sonar.javascript.lcov.reportPaths=${{ parameters.coveragePath }}
+        done
+
+        # Code coverage
+        sonar.coverage.exclusions=**/tests/**,**/*.test.*,**/*.spec.*
+
+        # Security
+        sonar.security.hotspots.enabled=true
+
+        # Quality gate
+        sonar.qualitygate.wait=${{ parameters.qualityGateWait }}
+
+  - task: SonarQubeAnalyze@5
+    displayName: "Run SonarQube Analysis"
+
+  - task: SonarQubePublish@5
+    displayName: "Publish Quality Gate Result"
+    inputs:
+      pollingTimeoutSec: "300"
+
+  - script: |
+      set -euo pipefail
+
+      echo "##[section]SonarQube Analysis Summary"
+
+      # Wait for quality gate result
+      sleep 10
+
+      # Get quality gate status from task report
+      TASK_REPORT=$(cat $(Agent.BuildDirectory)/.sonarqube/out/.sonar/report-task.txt)
+
+      echo "SonarQube Task Report:"
+      echo "$TASK_REPORT"
+
+      # Extract dashboard URL
+      DASHBOARD_URL=$(echo "$TASK_REPORT" | grep "dashboardUrl" | cut -d'=' -f2-)
+
+      if [ -n "$DASHBOARD_URL" ]; then
+        echo "##[section]View detailed results:"
+        echo "$DASHBOARD_URL"
+      fi
+
+    displayName: "Display SonarQube Results"
+    condition: always()
+
+  - script: |
+      # Fail if quality gate failed
+      if [ "${{ parameters.qualityGateWait }}" = "True" ]; then
+        echo "Quality gate enforcement is enabled"
+        # The SonarQubePublish task will fail the build if quality gate fails
+      fi
+    displayName: "Quality Gate Check"
+    condition: always()

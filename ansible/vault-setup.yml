@@ -1,0 +1,93 @@
+---
+- name: Setup HashiCorp Vault
+  hosts: all
+  become: yes
+  vars:
+    vault_version: "1.15.4"
+    kms_key_id: "{{ lookup('env', 'VAULT_KMS_KEY_ID') }}"
+    dynamodb_table: "{{ lookup('env', 'VAULT_DYNAMODB_TABLE') }}"
+    aws_region: "us-east-2"
+
+  tasks:
+    - name: Install dependencies
+      yum:
+        name:
+          - yum-utils
+          - shadow-utils
+        state: present
+
+    - name: Add HashiCorp repo
+      get_url:
+        url: https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+        dest: /etc/yum.repos.d/hashicorp.repo
+
+    - name: Install Vault
+      yum:
+        name: vault
+        state: present
+
+    - name: Create Vault config directory
+      file:
+        path: /etc/vault.d
+        state: directory
+        owner: vault
+        group: vault
+        mode: "0750"
+
+    - name: Configure Vault
+      copy:
+        dest: /etc/vault.d/vault.hcl
+        owner: vault
+        group: vault
+        mode: "0640"
+        content: |
+          ui = true
+          disable_mlock = true
+
+          storage "dynamodb" {
+            region     = "{{ aws_region }}"
+            table      = "{{ dynamodb_table }}"
+          }
+
+          listener "tcp" {
+            address     = "0.0.0.0:8200"
+            tls_disable = 1 # Enable TLS in production!
+          }
+
+          seal "awskms" {
+            region     = "{{ aws_region }}"
+            kms_key_id = "{{ kms_key_id }}"
+          }
+
+          api_addr = "http://{{ ansible_default_ipv4.address }}:8200"
+          cluster_addr = "http://{{ ansible_default_ipv4.address }}:8201"
+
+    - name: Enable and start Vault service
+      systemd:
+        name: vault
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Check Vault status
+      command: vault status -format=json
+      register: vault_status
+      environment:
+        VAULT_ADDR: "http://127.0.0.1:8200"
+      failed_when: vault_status.rc == 1 # rc 2 means sealed, which is fine initially
+      changed_when: false
+
+    - name: Initialize Vault (if not initialized)
+      command: vault operator init -recovery-shares=5 -recovery-threshold=3 -format=json
+      register: vault_init
+      environment:
+        VAULT_ADDR: "http://127.0.0.1:8200"
+      when: "(vault_status.stdout | from_json).initialized == false"
+
+    - name: Save init output locally
+      copy:
+        content: "{{ vault_init.stdout }}"
+        dest: "./vault-init-keys.json"
+      delegate_to: localhost
+      become: no
+      when: vault_init.changed

@@ -1,0 +1,257 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - terraform/*
+      - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/*
+
+variables:
+  - name: terraformVersion
+    value: "1.6.0"
+  - name: awsRegion
+    value: "us-east-2"
+  - name: tfStateKey
+    value: "terraform.tfstate"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+stages:
+  - stage: Validate
+    displayName: "Validate Terraform"
+    jobs:
+      - job: TerraformValidate
+        displayName: "Validate and Lint"
+        steps:
+          - checkout: self
+
+          - task: TerraformInstaller@0
+            displayName: "Install Terraform"
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - script: |
+              set -euo pipefail
+
+              cd terraform
+
+              echo "##[section]Terraform Format Check"
+              terraform fmt -check -recursive
+
+            displayName: "Terraform Format Check"
+
+          - script: |
+              set -euo pipefail
+
+              cd terraform
+
+              echo "##[section]Terraform Init"
+              terraform init -backend=false
+
+              echo "##[section]Terraform Validate"
+              terraform validate
+
+            displayName: "Terraform Validate"
+
+          - script: |
+              set -euo pipefail
+
+              echo "##[section]Installing tflint"
+              curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
+              cd terraform
+
+              echo "##[section]Running tflint"
+              tflint --init
+              tflint
+
+            displayName: "Run tflint"
+
+  - stage: SecurityScan
+    displayName: "Security Scanning"
+    dependsOn: Validate
+    jobs:
+      - job: SecurityScans
+        displayName: "Run Security Scans"
+        steps:
+          - checkout: self
+
+          - script: |
+              set -euo pipefail
+
+              echo "##[section]Installing Checkov"
+              pip install checkov
+
+              echo "##[section]Running Checkov"
+              checkov -d terraform/ \
+                --framework terraform \
+                --output cli \
+                --output junitxml \
+                --output-file-path $(Build.ArtifactStagingDirectory)/checkov-report.xml \
+                --soft-fail
+
+            displayName: "Run Checkov"
+
+          - script: |
+              set -euo pipefail
+
+              echo "##[section]Installing tfsec"
+              curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+              echo "##[section]Running tfsec"
+              tfsec terraform/ \
+                --format junit \
+                --out $(Build.ArtifactStagingDirectory)/tfsec-report.xml \
+                --soft-fail
+
+            displayName: "Run tfsec"
+
+          - task: PublishTestResults@2
+            displayName: "Publish Security Scan Results"
+            inputs:
+              testResultsFormat: "JUnit"
+              testResultsFiles: "$(Build.ArtifactStagingDirectory)/*-report.xml"
+              testRunTitle: "Terraform Security Scans"
+            condition: always()
+
+  - stage: Plan
+    displayName: "Terraform Plan"
+    dependsOn: SecurityScan
+    jobs:
+      - job: TerraformPlan
+        displayName: "Generate Plan"
+        steps:
+          - checkout: self
+
+          - task: TerraformInstaller@0
+            displayName: "Install Terraform"
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - task: AWSCLI@1
+            displayName: "Configure AWS CLI"
+            inputs:
+              awsCredentials: "AWS-ServiceConnection"
+              regionName: $(awsRegion)
+
+          - script: |
+              set -euo pipefail
+
+              cd terraform
+
+              echo "##[section]Terraform Init"
+              terraform init \
+                -backend-config="region=$(awsRegion)" \
+                -backend-config="key=$(tfStateKey)"
+
+            displayName: "Terraform Init"
+
+          - script: |
+              set -euo pipefail
+
+              cd terraform
+
+              echo "##[section]Terraform Plan"
+              terraform plan \
+                -out=tfplan \
+                -input=false \
+                -detailed-exitcode || EXIT_CODE=$?
+
+              # Exit codes: 0 = no changes, 1 = error, 2 = changes
+              if [ ${EXIT_CODE:-0} -eq 1 ]; then
+                echo "##vso[task.logissue type=error]Terraform plan failed"
+                exit 1
+              elif [ ${EXIT_CODE:-0} -eq 2 ]; then
+                echo "##[section]Changes detected in plan"
+              else
+                echo "##[section]No changes detected"
+              fi
+
+              # Show plan
+              terraform show tfplan
+
+            displayName: "Terraform Plan"
+
+          - task: PublishPipelineArtifact@1
+            displayName: "Publish Plan"
+            inputs:
+              targetPath: "terraform/tfplan"
+              artifact: "terraform-plan"
+              publishLocation: "pipeline"
+
+  - stage: Apply
+    displayName: "Terraform Apply"
+    dependsOn: Plan
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: TerraformApply
+        displayName: "Apply Infrastructure Changes"
+        environment: "infrastructure"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: TerraformInstaller@0
+                  displayName: "Install Terraform"
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+
+                - task: AWSCLI@1
+                  displayName: "Configure AWS CLI"
+                  inputs:
+                    awsCredentials: "AWS-ServiceConnection"
+                    regionName: $(awsRegion)
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: "Download Plan"
+                  inputs:
+                    artifact: "terraform-plan"
+                    path: "terraform/"
+
+                - script: |
+                    set -euo pipefail
+
+                    cd terraform
+
+                    echo "##[section]Terraform Init"
+                    terraform init \
+                      -backend-config="region=$(awsRegion)" \
+                      -backend-config="key=$(tfStateKey)"
+
+                  displayName: "Terraform Init"
+
+                - script: |
+                    set -euo pipefail
+
+                    cd terraform
+
+                    echo "##[section]Terraform Apply"
+                    terraform apply \
+                      -input=false \
+                      -auto-approve \
+                      tfplan
+
+                    echo "##[section]Terraform Output"
+                    terraform output -json > $(Build.ArtifactStagingDirectory)/terraform-outputs.json
+
+                  displayName: "Terraform Apply"
+
+                - task: PublishPipelineArtifact@1
+                  displayName: "Publish Outputs"
+                  inputs:
+                    targetPath: "$(Build.ArtifactStagingDirectory)/terraform-outputs.json"
+                    artifact: "terraform-outputs"
+                    publishLocation: "pipeline"

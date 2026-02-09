@@ -1,0 +1,232 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+      - release/*
+  paths:
+    include:
+      - frontend/*
+      - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - frontend/*
+
+variables:
+  - template: ../pipelines/vars/common-vars.yml
+  - name: projectType
+    value: "frontend"
+  - name: imageName
+    value: "react-frontend"
+  - name: sonarProjectKey
+    value: "frontend-app"
+  - name: sonarProjectName
+    value: "Frontend Application"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+stages:
+  - stage: Build
+    displayName: "Build & Test"
+    jobs:
+      - job: BuildAndTest
+        displayName: "Build and Test Frontend"
+        steps:
+          - checkout: self
+            fetchDepth: 0 # Full history for SonarQube
+
+          - task: NodeTool@0
+            displayName: "Use Node.js 18.x"
+            inputs:
+              versionSpec: "18.x"
+
+          # Unit Tests with Caching
+          - template: ../pipelines/templates/test/unit-tests.yml
+            parameters:
+              projectType: $(projectType)
+              workingDirectory: "./frontend"
+              coverageThreshold: 80
+              nodeVersion: "18.x"
+
+          # Build Production Bundle
+          - script: |
+              set -euo pipefail
+
+              cd ./frontend
+
+              echo "##[section]Building production bundle"
+              npm run build
+
+              # Display bundle size
+              echo "##[section]Bundle size:"
+              du -sh build/
+
+            displayName: "Build Production Bundle"
+
+  - stage: SecurityScan
+    displayName: "Security Scanning"
+    dependsOn: Build
+    jobs:
+      - job: SecurityScans
+        displayName: "Run Security Scans"
+        steps:
+          - checkout: self
+
+          # OWASP Dependency Check
+          - template: ../pipelines/templates/security/owasp-dependency-check.yml
+            parameters:
+              projectType: $(projectType)
+              workingDirectory: "./frontend"
+              failOnHigh: true
+
+          # SonarQube Analysis
+          - template: ../pipelines/templates/security/sonarqube-analysis.yml
+            parameters:
+              projectKey: $(sonarProjectKey)
+              projectName: $(sonarProjectName)
+              projectType: $(projectType)
+              workingDirectory: "./frontend"
+              coveragePath: "$(Build.ArtifactStagingDirectory)/test-results/coverage/lcov.info"
+              qualityGateWait: true
+
+  - stage: BuildImage
+    displayName: "Build & Push Docker Image"
+    dependsOn: SecurityScan
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/develop')))
+    jobs:
+      - job: DockerBuild
+        displayName: "Build Docker Image"
+        steps:
+          - checkout: self
+
+          # Build Docker Image
+          - template: ../pipelines/templates/docker/build-docker.yml
+            parameters:
+              dockerfilePath: "./frontend/Dockerfile"
+              buildContext: "./frontend"
+              imageName: $(imageName)
+              imageTag: $(Build.BuildNumber)
+              enableCache: true
+              buildArgs:
+                NODE_VERSION: "18"
+
+          # Scan with Trivy
+          - template: ../pipelines/templates/docker/scan-trivy.yml
+            parameters:
+              imageName: $(imageName)
+              imageTag: $(Build.BuildNumber)
+              severityThreshold: "CRITICAL,HIGH"
+              failOnVulnerabilities: true
+              ignoreUnfixed: false
+
+          # Generate SBOM
+          - template: ../pipelines/templates/docker/sbom-syft.yml
+            parameters:
+              imageName: $(imageName)
+              imageTag: $(Build.BuildNumber)
+              outputFormats:
+                - "spdx-json"
+                - "cyclonedx-json"
+              attachToImage: true
+
+          # Sign with Cosign (Keyless)
+          - template: ../pipelines/templates/docker/sign-cosign.yml
+            parameters:
+              imageName: $(imageName)
+              imageTag: $(Build.BuildNumber)
+              ecrRegistry: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com"
+              signingMethod: "keyless"
+              rekorUrl: "https://rekor.sigstore.dev"
+
+          # Push to ECR
+          - template: ../pipelines/templates/docker/push-ecr.yml
+            parameters:
+              imageName: $(imageName)
+              imageTag: $(Build.BuildNumber)
+              ecrRegistry: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com"
+              pushLatest: true
+              enableImageScanning: true
+              additionalTags:
+                - "commit-$(Build.SourceVersion)"
+
+  - stage: DeployDev
+    displayName: "Deploy to Dev"
+    dependsOn: BuildImage
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    jobs:
+      - deployment: DeployToDevEnvironment
+        displayName: "Deploy to Dev"
+        environment: "dev"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - template: ../pipelines/templates/k8s/deploy-eks.yml
+                  parameters:
+                    environment: "dev"
+                    namespace: "dev"
+                    manifestsPath: "./k8s/dev"
+                    imageTag: $(Build.BuildNumber)
+                    awsRegion: $(AWS_REGION)
+                    clusterName: $(EKS_CLUSTER_NAME)
+                    healthCheckTimeout: 300
+                    enableRollback: true
+
+  - stage: DeployStaging
+    displayName: "Deploy to Staging"
+    dependsOn: BuildImage
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployToStagingEnvironment
+        displayName: "Deploy to Staging"
+        environment: "staging"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - template: ../pipelines/templates/k8s/deploy-eks.yml
+                  parameters:
+                    environment: "staging"
+                    namespace: "staging"
+                    manifestsPath: "./k8s/staging"
+                    imageTag: $(Build.BuildNumber)
+                    awsRegion: $(AWS_REGION)
+                    clusterName: $(EKS_CLUSTER_NAME)
+                    healthCheckTimeout: 300
+                    enableRollback: true
+
+  - stage: DeployProd
+    displayName: "Deploy to Production"
+    dependsOn: DeployStaging
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployToProdEnvironment
+        displayName: "Deploy to Production"
+        environment: "production"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - template: ../pipelines/templates/k8s/deploy-eks.yml
+                  parameters:
+                    environment: "prod"
+                    namespace: "prod"
+                    manifestsPath: "./k8s/prod"
+                    imageTag: $(Build.BuildNumber)
+                    awsRegion: $(AWS_REGION)
+                    clusterName: $(EKS_CLUSTER_NAME)
+                    healthCheckTimeout: 300
+                    enableRollback: true
