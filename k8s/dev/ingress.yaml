@@ -8,7 +8,8 @@ metadata:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-2:214900426470:certificate/64e9a3e5-d71b-4a03-ac7d-6aac9ed67f69
     # Health check configuration
     alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
     alb.ingress.kubernetes.io/healthcheck-path: /health
@@ -17,14 +18,18 @@ metadata:
     alb.ingress.kubernetes.io/healthy-threshold-count: "2"
     alb.ingress.kubernetes.io/unhealthy-threshold-count: "2"
     # Security
-    alb.ingress.kubernetes.io/security-groups: ${ALB_SECURITY_GROUP_ID}
+    # alb.ingress.kubernetes.io/security-groups: ${ALB_SECURITY_GROUP_ID}
     # Tags
     alb.ingress.kubernetes.io/tags: Environment=dev,ManagedBy=kubernetes
 spec:
+  tls:
+    - hosts:
+        - k8s-dev-applicat-175a760d5d-1525477425.us-east-2.elb.amazonaws.com
+      secretName: frontend-tls-secret
   rules:
     - http:
         paths:
-          # Frontend routes
+          # Frontend routes (Catch-all)
           - path: /
             pathType: Prefix
             backend:
@@ -32,25 +37,3 @@ spec:
                 name: frontend
                 port:
                   number: 80
-          # Backend API routes
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: backend
-                port:
-                  number: 5000
-          - path: /docs
-            pathType: Prefix
-            backend:
-              service:
-                name: backend
-                port:
-                  number: 5000
-          - path: /health
-            pathType: Prefix
-            backend:
-              service:
-                name: backend
-                port:
-                  number: 5000
