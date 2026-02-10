@@ -13,12 +13,14 @@ spec:
       labels:
         app: frontend
     spec:
+      securityContext:
+        fsGroup: 101
       containers:
         - name: frontend
           image: 214900426470.dkr.ecr.us-east-2.amazonaws.com/capstone-project-frontend:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           resources:
             requests:
               memory: "128Mi"
@@ -42,6 +44,10 @@ spec:
               mountPath: /var/cache/nginx
             - name: run
               mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /var/lib/nginx/logs
       volumes:
         - name: nginx-config
           configMap:
@@ -49,4 +55,8 @@ spec:
         - name: cache
           emptyDir: {}
         - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: logs
           emptyDir: {}
