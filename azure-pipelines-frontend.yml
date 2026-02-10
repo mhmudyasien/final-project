@@ -7,54 +7,47 @@ trigger:
   paths:
     include: [frontend/*]
 
-pool:
-  name: "Default"
+pr:
+  branches:
+    include: [main]
+  paths:
+    include: [frontend/*]
 
 variables:
-  - group: "frontend-variables"
+  - group: "aws-credentials"
   - name: imageRepository
-    value: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/react-frontend"
-  - name: tag
-    value: "$(Build.BuildNumber)"
+    value: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/capstone-project-frontend"
 
 stages:
-  - stage: QualityGate
+  - stage: PRChecks
+    displayName: "PR Fast Checks"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
     jobs:
-      - job: OWASP
+      - job: LintAndTest
         steps:
-          - template: devops/templates/security/owasp-dependency-check.yml
-            parameters:
-              language: "nodejs"
+          - template: devops/templates/node-pr-checks.yml
 
-      - job: SonarQube
-        steps:
-          - template: devops/templates/security/sonarqube-analysis.yml
-            parameters:
-              projectKey: "frontend-react"
-
-  - stage: TestAndBuild
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  - stage: BuildAndPush
+    displayName: "Build, Push and Sign"
+    condition: ne(variables['Build.Reason'], 'PullRequest')
     jobs:
       - job: Build
         steps:
-          - template: devops/templates/test/unit-tests.yml
+          - template: devops/templates/aws-ecr-login.yml
             parameters:
-              language: "nodejs"
-              testCommand: "npm test -- --watchAll=false --coverage --reporters=default --reporters=jest-junit"
-              coveragePath: "coverage/cobertura-coverage.xml"
+              awsServiceConnection: "aws-service-connection"
 
-          - template: devops/templates/docker/build-scan-sign-push.yml
+          - template: devops/templates/docker-build-push.yml
             parameters:
+              imageRepository: $(imageRepository)
+              dockerContext: "frontend"
               dockerfilePath: "frontend/Dockerfile"
-              context: "frontend"
-              repository: $(imageRepository)
-              imageTags: ["$(tag)", "latest"]
 
-  - stage: TriggerInfra
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
-    jobs:
-      - job: Trigger
-        steps:
-          - script: |
-              echo "Triggering infra pipeline for frontend-deploy with tag $(tag)..."
-            displayName: "Trigger CD"
+          - template: devops/templates/image-signing.yml
+            parameters:
+              imageFullRef: "$(imageRepository):$(Build.SourceVersion)"
+
+          - template: devops/templates/publish-image-artifact.yml
+            parameters:
+              artifactName: "frontend-image"
+              imageRef: "$(imageRepository):$(Build.SourceVersion)"

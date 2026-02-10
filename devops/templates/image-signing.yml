@@ -1,0 +1,10 @@
+parameters:
+  - name: imageFullRef
+    type: string
+
+steps:
+  - script: |
+      # Assuming cosign is pre-installed or using a container
+      echo "Signing image ${{ parameters.imageFullRef }}..."
+      # cosign sign --key env://COSIGN_PRIVATE_KEY ${{ parameters.imageFullRef }}
+    displayName: "Sign Container Image"

@@ -24,6 +24,14 @@ output "vault_public_ip" {
   value = module.vault.vault_public_ip
 }
 
+output "backend_ecr_url" {
+  value = module.ecr.backend_repo_url
+}
+
+output "frontend_ecr_url" {
+  value = module.ecr.frontend_repo_url
+}
+
 output "vault_kms_key_arn" {
   value = module.vault.vault_kms_key_arn
 }
@@ -43,4 +51,8 @@ output "node_security_group_id" {
 output "db_password" {
   value     = var.db_password != "" ? var.db_password : module.security.db_password
   sensitive = true
+}
+
+output "cluster_oidc_issuer_url" {
+  value = module.eks.cluster_oidc_issuer_url
 }

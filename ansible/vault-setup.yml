@@ -6,7 +6,7 @@
     vault_version: "1.15.4"
     kms_key_id: "{{ lookup('env', 'VAULT_KMS_KEY_ID') }}"
     dynamodb_table: "{{ lookup('env', 'VAULT_DYNAMODB_TABLE') }}"
-    aws_region: "us-east-2"
+    aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
 
   tasks:
     - name: Install dependencies

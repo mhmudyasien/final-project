@@ -1,0 +1,16 @@
+parameters:
+  - name: awsRegion
+    type: string
+    default: "us-east-1"
+  - name: awsServiceConnection
+    type: string
+
+steps:
+  - task: AWSShellScript@1
+    displayName: "Login to AWS ECR"
+    inputs:
+      awsCredentials: ${{ parameters.awsServiceConnection }}
+      regionName: ${{ parameters.awsRegion }}
+      scriptType: "inline"
+      inlineScript: |
+        aws ecr get-login-password --region ${{ parameters.awsRegion }} | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.${{ parameters.awsRegion }}.amazonaws.com

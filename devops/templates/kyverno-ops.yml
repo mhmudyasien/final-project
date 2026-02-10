@@ -1,0 +1,20 @@
+parameters:
+  - name: action
+    type: string
+    values:
+      - install
+      - apply
+    default: "apply"
+
+steps:
+  - script: |
+      if [ "${{ parameters.action }}" == "install" ]; then
+        echo "Installing Kyverno..."
+        helm repo add kyverno https://kyverno.github.io/kyverno/
+        helm repo update
+        helm install kyverno kyverno/kyverno -n kyverno --create-namespace --set admissionController.replicas=1
+      fi
+
+      echo "Applying Kyverno Policies in Audit mode..."
+      kubectl apply -f kyverno/policies/
+    displayName: "Kyverno Operations"

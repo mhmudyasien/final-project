@@ -1,0 +1,28 @@
+parameters:
+  - name: awsServiceConnection
+    type: string
+  - name: clusterName
+    type: string
+  - name: namespace
+    type: string
+  - name: manifestPath
+    type: string
+  - name: deploymentName
+    type: string
+  - name: containerName
+    type: string
+  - name: imageRef
+    type: string
+
+steps:
+  - task: AWSShellScript@1
+    displayName: "Deploy to EKS"
+    inputs:
+      awsCredentials: ${{ parameters.awsServiceConnection }}
+      regionName: $(AWS_REGION)
+      scriptType: "inline"
+      inlineScript: |
+        aws eks update-kubeconfig --name ${{ parameters.clusterName }} --region $(AWS_REGION)
+        kubectl apply -f ${{ parameters.manifestPath }} -n ${{ parameters.namespace }}
+        kubectl set image deployment/${{ parameters.deploymentName }} ${{ parameters.containerName }}=${{ parameters.imageRef }} -n ${{ parameters.namespace }}
+        kubectl rollout status deployment/${{ parameters.deploymentName }} -n ${{ parameters.namespace }}

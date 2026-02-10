@@ -30,7 +30,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: backend
-          image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/fastapi-backend:${IMAGE_TAG}
+          image: 214900426470.dkr.ecr.us-east-2.amazonaws.com/capstone-project-backend:latest
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args: ["source /vault/secrets/config && python3 app.py"]

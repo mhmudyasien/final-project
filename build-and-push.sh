@@ -6,8 +6,8 @@ set -euo pipefail
 # Configuration
 AWS_REGION=${AWS_REGION:-"us-east-2"}
 IMAGE_TAG=${1:-"latest"}
-REPO_BACKEND="fastapi-backend"
-REPO_FRONTEND="react-frontend"
+REPO_BACKEND="capstone-project-backend"
+REPO_FRONTEND="capstone-project-frontend"
 
 # Colors for output
 RED='\033[0;31m'

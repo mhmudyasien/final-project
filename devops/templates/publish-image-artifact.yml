@@ -1,0 +1,17 @@
+parameters:
+  - name: artifactName
+    type: string
+  - name: imageRef
+    type: string
+
+steps:
+  - script: |
+      echo '{"image": "${{ parameters.imageRef }}", "commit": "$(Build.SourceVersion)"}' > image-info.json
+    displayName: "Generate Image Metadata"
+
+  - task: PublishPipelineArtifact@1
+    inputs:
+      targetPath: "image-info.json"
+      artifact: ${{ parameters.artifactName }}
+      publishLocation: "pipeline"
+    displayName: "Publish Image Artifact"

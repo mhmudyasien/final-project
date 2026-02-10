@@ -1,5 +1,4 @@
 # azure-pipelines-backend.yml
-# TRUNK-BASED PIPELINE: PRs scan only, main deploys to DEV
 trigger:
   branches:
     include: [main, release/*]
@@ -8,61 +7,47 @@ trigger:
   paths:
     include: [backend/*]
 
-pool:
-  name: "Default"
+pr:
+  branches:
+    include: [main]
+  paths:
+    include: [backend/*]
 
 variables:
-  - group: "backend-variables" # AWS_ACCOUNT_ID, AWS_REGION, CLUSTER_NAME
+  - group: "aws-credentials"
   - name: imageRepository
-    value: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/fastapi-backend"
-  - name: tag
-    value: "$(Build.BuildNumber)"
+    value: "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/capstone-project-backend"
 
 stages:
-  - stage: QualityGate
-    displayName: "Static Analysis & Security"
+  - stage: PRChecks
+    displayName: "PR Fast Checks"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
     jobs:
-      - job: OWASP_Scan
+      - job: LintAndTest
         steps:
-          - template: devops/templates/security/owasp-dependency-check.yml
-            parameters:
-              language: "python"
-
-      - job: SonarQube
-        steps:
-          - template: devops/templates/security/sonarqube-analysis.yml
-            parameters:
-              projectKey: "backend-fastapi"
+          - template: devops/templates/python-pr-checks.yml
 
   - stage: BuildAndPush
-    displayName: "Build & Push Secure Image"
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    displayName: "Build, Push and Sign"
+    condition: ne(variables['Build.Reason'], 'PullRequest')
     jobs:
       - job: Build
-        container:
-          image: postgres:15
-          ports: ["5432:5432"] # Service container for integration tests
         steps:
-          - template: devops/templates/test/unit-tests.yml
+          - template: devops/templates/aws-ecr-login.yml
             parameters:
-              language: "python"
-              testCommand: "pytest --junitxml=test-results.xml --cov=src --cov-report=xml"
-              coveragePath: "coverage.xml"
+              awsServiceConnection: "aws-service-connection"
 
-          - template: devops/templates/docker/build-scan-sign-push.yml
+          - template: devops/templates/docker-build-push.yml
             parameters:
+              imageRepository: $(imageRepository)
+              dockerContext: "backend"
               dockerfilePath: "backend/Dockerfile"
-              context: "backend"
-              repository: $(imageRepository)
-              imageTags: ["$(tag)", "latest"]
 
-  - stage: TriggerInfra
-    displayName: "Trigger CD Pipeline"
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
-    jobs:
-      - job: Trigger
-        steps:
-          - script: |
-              echo "Triggering infra pipeline for backend-deploy with tag $(tag)..."
-              # Azure DevOps Rest API call to trigger infra-repo with tag as parameter
-            displayName: "Trigger CD (Rest API)"
+          - template: devops/templates/image-signing.yml
+            parameters:
+              imageFullRef: "$(imageRepository):$(Build.SourceVersion)"
+
+          - template: devops/templates/publish-image-artifact.yml
+            parameters:
+              artifactName: "backend-image"
+              imageRef: "$(imageRepository):$(Build.SourceVersion)"

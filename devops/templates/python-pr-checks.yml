@@ -1,0 +1,33 @@
+parameters:
+  - name: workingDirectory
+    type: string
+    default: "backend"
+
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: "3.11"
+    displayName: "Use Python 3.11"
+
+  - script: |
+      python -m pip install --upgrade pip
+      pip install flake8 pytest pip-audit
+      if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    displayName: "Install dependencies"
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  - script: |
+      flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    displayName: "Lint with flake8"
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  - script: |
+      pytest
+    displayName: "Run unit tests"
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  - script: |
+      pip-audit
+    displayName: "Security audit with pip-audit"
+    workingDirectory: ${{ parameters.workingDirectory }}
+    continueOnError: true

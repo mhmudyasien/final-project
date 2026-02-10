@@ -24,3 +24,9 @@ variable "db_password" {
   sensitive   = true
   default     = "" # If empty, a random one is generated in security module
 }
+
+variable "ssh_public_key_path" {
+  description = "Path to the SSH public key"
+  type        = string
+  default     = "~/.ssh/id_rsa.pub"
+}

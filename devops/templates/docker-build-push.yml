@@ -1,0 +1,26 @@
+parameters:
+  - name: imageRepository
+    type: string
+  - name: dockerContext
+    type: string
+    default: "."
+  - name: dockerfilePath
+    type: string
+    default: "Dockerfile"
+  - name: buildArgs
+    type: string
+    default: ""
+
+steps:
+  - script: |
+      export DOCKER_BUILDKIT=1
+      docker build \
+        --cache-from type=gha \
+        --cache-to type=gha,mode=max \
+        ${{ parameters.buildArgs }} \
+        -t ${{ parameters.imageRepository }}:$(Build.SourceVersion) \
+        -f ${{ parameters.dockerfilePath }} \
+        ${{ parameters.dockerContext }}
+
+      docker push ${{ parameters.imageRepository }}:$(Build.SourceVersion)
+    displayName: "Docker BuildKit Build and Push"

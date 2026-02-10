@@ -85,6 +85,7 @@ REDIS_ENDPOINT=$(get_terraform_output "redis_endpoint")
 DB_PASSWORD=$(get_terraform_output "db_password")
 
 EKS_CLUSTER_NAME=$(get_terraform_output "cluster_name")
+AWS_REGION=$(cd "$TERRAFORM_DIR" && terraform state show module.vault.data.aws_region.current | grep 'name ' | cut -d '"' -f2)
 
 log_info "Fetching EKS cluster details..."
 EKS_HOST=$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --query "cluster.endpoint" --output text 2>/dev/null || echo "")
@@ -111,6 +112,7 @@ set -euo pipefail
 export VAULT_KMS_KEY_ID="$VAULT_KMS_ID"
 export VAULT_DYNAMODB_TABLE="$VAULT_DYNAMODB"
 export VAULT_ADDR="http://$VAULT_IP:8200"
+export AWS_REGION="$AWS_REGION"
 
 echo "=========================================="
 echo "Running Vault Setup on $VAULT_IP"
@@ -159,6 +161,9 @@ cat <<EOF > run-vault-config.sh
 #!/bin/bash
 set -euo pipefail
 
+# Ensure local binaries (like kubectl) are in PATH
+export PATH="\$PATH:$(pwd)"
+
 # Vault configuration script
 if [ -z "\${1:-}" ]; then
     echo "ERROR: Root token required"
@@ -170,16 +175,22 @@ if [ -z "\${1:-}" ]; then
 fi
 
 export VAULT_TOKEN="\$1"
-export VAULT_ADDR="http://$VAULT_IP:8200"
+if [ "\${USE_LOCAL_VAULT:-false}" = "true" ]; then
+    export VAULT_ADDR="http://localhost:8200"
+else
+    export VAULT_ADDR="http://$VAULT_IP:8200"
+fi
+export AWS_REGION="$AWS_REGION"
 export K8S_HOST="$EKS_HOST"
 export K8S_CA_CERT="$EKS_CA"
+export K8S_OIDC_ISSUER="$(get_terraform_output "cluster_oidc_issuer_url")"
 export DB_PASSWORD="$DB_PASSWORD"
 export RDS_ENDPOINT="$RDS_ENDPOINT"
 export REDIS_ENDPOINT="$REDIS_ENDPOINT"
 
 # Get service account token for Vault auth
 echo "Fetching Kubernetes service account token..."
-export TOKEN_REVIEWER_JWT=\$(kubectl get secret \$(kubectl get sa vault-auth -n default -o jsonpath='{.secrets[0].name}') -n default -o jsonpath='{.data.token}' | base64 -d)
+export TOKEN_REVIEWER_JWT=\$(kubectl get secret vault-auth-token -n vault -o jsonpath='{.data.token}' | base64 -d)
 
 echo "=========================================="
 echo "Configuring Vault Secrets & Auth"

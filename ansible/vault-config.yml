@@ -9,6 +9,7 @@
     db_password: "{{ lookup('env', 'DB_PASSWORD') }}"
     rds_endpoint: "{{ lookup('env', 'RDS_ENDPOINT') }}"
     redis_endpoint: "{{ lookup('env', 'REDIS_ENDPOINT') }}"
+    aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
 
   tasks:
     - name: Enable KV v2 secrets engine
@@ -35,7 +36,7 @@
         kubernetes_host="{{ k8s_host }}" \
         kubernetes_ca_cert="{{ k8s_ca_cert }}" \
         token_reviewer_jwt="{{ lookup('env', 'TOKEN_REVIEWER_JWT') }}" \
-        issuer="https://oidc.eks.us-east-2.amazonaws.com/id/E9A24F205507056D535A3A9656DB7800" \
+        issuer="{{ lookup('env', 'K8S_OIDC_ISSUER') }}" \
         disable_iss_validation=true
       environment:
         VAULT_ADDR: "{{ vault_addr }}"

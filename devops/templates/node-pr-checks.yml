@@ -1,0 +1,32 @@
+parameters:
+  - name: workingDirectory
+    type: string
+    default: "frontend"
+
+steps:
+  - task: NodeTool@0
+    inputs:
+      versionSpec: "18.x"
+    displayName: "Install Node.js"
+
+  - script: |
+      npm ci
+    displayName: "Install dependencies"
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  - script: |
+      npm run lint
+    displayName: "Lint"
+    workingDirectory: ${{ parameters.workingDirectory }}
+    continueOnError: true
+
+  - script: |
+      npm test -- --watchAll=false
+    displayName: "Run unit tests"
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  - script: |
+      npm audit
+    displayName: "Security audit with npm audit"
+    workingDirectory: ${{ parameters.workingDirectory }}
+    continueOnError: true
