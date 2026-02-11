@@ -1,50 +1,99 @@
 - name: Configure Vault for Kubernetes
   hosts: localhost
   connection: local
+
   vars:
     vault_addr: "{{ lookup('env', 'VAULT_ADDR') }}"
     vault_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+
     k8s_host: "{{ lookup('env', 'K8S_HOST') }}"
-    k8s_ca_cert: "{{ lookup('env', 'K8S_CA_CERT') }}"
-    db_password: "{{ lookup('env', 'DB_PASSWORD') }}"
-    rds_endpoint: "{{ lookup('env', 'RDS_ENDPOINT') }}"
-    redis_endpoint: "{{ lookup('env', 'REDIS_ENDPOINT') }}"
-    aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
+    # K8S_CA_CERT may be raw PEM or base64. We'll normalize below.
+    k8s_ca_cert_raw: "{{ lookup('env', 'K8S_CA_CERT') | default('', true) }}"
+    k8s_oidc_issuer: "{{ lookup('env', 'K8S_OIDC_ISSUER') | default('', true) }}"
+
+    # Token reviewer JWT (support multiple env var names)
+    token_reviewer_jwt: >-
+      {{
+        (lookup('env', 'TOKEN_REVIEWER_JWT') | default('', true))
+        if (lookup('env', 'TOKEN_REVIEWER_JWT') | default('', true)) | length > 0
+        else (lookup('env', 'K8S_TOKEN_REVIEWER_JWT') | default('', true))
+      }}
+
+    db_password: "{{ lookup('env', 'DB_PASSWORD') | default('', true) }}"
+    rds_endpoint: "{{ lookup('env', 'RDS_ENDPOINT') | default('', true) }}"
+    redis_endpoint: "{{ lookup('env', 'REDIS_ENDPOINT') | default('', true) }}"
+
+    aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-2', true) }}"
+
+  # Apply Vault env globally so every `vault` command is authenticated
+  environment:
+    VAULT_ADDR: "{{ vault_addr }}"
+    VAULT_TOKEN: "{{ vault_token }}"
 
   tasks:
-    - name: Enable KV v2 secrets engine
+    - name: Validate required environment variables
+      assert:
+        that:
+          - vault_addr is string and vault_addr | length > 0
+          - vault_token is string and vault_token | length > 0
+          - k8s_host is string and k8s_host | length > 0
+          - token_reviewer_jwt is string and token_reviewer_jwt | length > 0
+          - k8s_ca_cert_raw is string and k8s_ca_cert_raw | length > 0
+        fail_msg: |
+          Missing required env vars.
+          Required:
+            - VAULT_ADDR
+            - VAULT_TOKEN
+            - K8S_HOST
+            - K8S_CA_CERT   (raw PEM or base64)
+            - TOKEN_REVIEWER_JWT (or K8S_TOKEN_REVIEWER_JWT)
+
+    - name: Normalize K8S CA cert (handle base64 or raw PEM)
+      set_fact:
+        k8s_ca_cert: >-
+          {{
+            (k8s_ca_cert_raw | b64decode)
+            if ('BEGIN CERTIFICATE' not in k8s_ca_cert_raw)
+            else k8s_ca_cert_raw
+          }}
+
+    - name: Enable KV v2 secrets engine (idempotent)
       command: vault secrets enable -path=secret kv-v2
-      environment:
-        VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_TOKEN: "{{ vault_token }}"
       register: secret_enable
-      failed_when: "'path is already in use' not in secret_enable.stderr and secret_enable.rc != 0"
+      failed_when: >
+        secret_enable.rc != 0 and
+        ('path is already in use' not in secret_enable.stderr | default('')) and
+        ('already in use' not in secret_enable.stderr | default(''))
       changed_when: secret_enable.rc == 0
 
-    - name: Enable Kubernetes auth method
+    - name: Enable Kubernetes auth method (idempotent)
       command: vault auth enable kubernetes
-      environment:
-        VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_TOKEN: "{{ vault_token }}"
       register: auth_enable
-      failed_when: "'path is already in use' not in auth_enable.stderr and auth_enable.rc != 0"
+      failed_when: >
+        auth_enable.rc != 0 and
+        ('path is already in use' not in auth_enable.stderr | default('')) and
+        ('already in use' not in auth_enable.stderr | default(''))
       changed_when: auth_enable.rc == 0
 
-    - name: Configure Kubernetes auth
+    - name: Configure Kubernetes auth (EKS)
       command: >
-        vault write auth/kubernetes/config \
-        kubernetes_host="{{ k8s_host }}" \
-        kubernetes_ca_cert="{{ k8s_ca_cert }}" \
-        token_reviewer_jwt="{{ lookup('env', 'TOKEN_REVIEWER_JWT') }}" \
-        issuer="{{ lookup('env', 'K8S_OIDC_ISSUER') }}" \
+        vault write auth/kubernetes/config
+        kubernetes_host="{{ k8s_host }}"
+        kubernetes_ca_cert="{{ k8s_ca_cert }}"
+        token_reviewer_jwt="{{ token_reviewer_jwt }}"
         disable_iss_validation=true
-      environment:
-        VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_TOKEN: "{{ vault_token }}"
 
-    - name: Create webapp policy
+    - name: Configure issuer (optional, only if provided)
+      when: k8s_oidc_issuer | length > 0
+      command: >
+        vault write auth/kubernetes/config
+        issuer="{{ k8s_oidc_issuer }}"
+        disable_iss_validation=true
+
+    - name: Create webapp policy file
       copy:
         dest: /tmp/webapp-policy.hcl
+        mode: "0600"
         content: |
           path "secret/data/webapp/*" {
             capabilities = ["read"]
@@ -52,26 +101,23 @@
 
     - name: Write webapp policy to Vault
       command: vault policy write webapp /tmp/webapp-policy.hcl
-      environment:
-        VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_TOKEN: "{{ vault_token }}"
 
     - name: Create webapp role
       command: >
-        vault write auth/kubernetes/role/webapp-role \
-        bound_service_account_names=default \
-        bound_service_account_namespaces=dev,staging,prod \
-        policies=webapp \
+        vault write auth/kubernetes/role/webapp-role
+        bound_service_account_names=default
+        bound_service_account_namespaces=dev,staging,prod
+        policies=webapp
         ttl=24h
-      environment:
-        VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_TOKEN: "{{ vault_token }}"
-    - name: Write application secrets
+
+    - name: Write application secrets (only if values provided)
+      when:
+        - db_password | length > 0
+        - rds_endpoint | length > 0
+        - redis_endpoint | length > 0
       command: >
-        vault kv put secret/webapp/config \
-        db_password="{{ db_password }}" \
-        rds_endpoint="{{ rds_endpoint }}" \
+        vault kv put secret/webapp/config
+        db_password="{{ db_password }}"
+        rds_endpoint="{{ rds_endpoint }}"
         redis_endpoint="{{ redis_endpoint }}"
-      environment:
-        VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_TOKEN: "{{ vault_token }}"
+
